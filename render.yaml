@@ -1,0 +1,18 @@
+services:
+  # Backend API service
+  - type: web
+    name: elw-mailing-list-api
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build:server
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false  # Set this in Render dashboard
+      - key: CLIENT_URL
+        value: https://elw-mailing-list.vercel.app
+      - key: PORT
+        value: 10000
+    healthCheckPath: /api/health
