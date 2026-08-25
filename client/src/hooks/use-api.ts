@@ -19,6 +19,13 @@ export function useDashboardStats() {
   });
 }
 
+export function useMailVolumeByMonth() {
+  return useQuery({
+    queryKey: ['dashboard', 'mail-volume-by-month'],
+    queryFn: () => fetchJson<{ success: boolean; data: MailVolumeByMonth[] }>(`${API_BASE}/dashboard/mail-volume-by-month`),
+  });
+}
+
 // ─── Properties ──────────────────────────────────────────────
 export function useProperties(params?: { page?: number; limit?: number; state?: string; county?: string; apn?: string; sortBy?: string; sortOrder?: string }) {
   const query = new URLSearchParams();
@@ -349,4 +356,9 @@ export interface DealStats {
   leadRate: string;
   conversionRate: string;
   byType: Array<{ hitType: string; count: number }>;
+}
+
+export interface MailVolumeByMonth {
+  month: string;
+  count: number;
 }

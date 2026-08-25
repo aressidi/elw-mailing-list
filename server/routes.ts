@@ -820,6 +820,47 @@ router.post('/suppression', async (req, res) => {
 // Dashboard/Analytics Routes
 // ============================================================
 
+// GET /api/dashboard/mail-volume-by-month - Get mailings grouped by month
+router.get('/dashboard/mail-volume-by-month', async (_req, res) => {
+  try {
+    // Get all mailings with their mailDate
+    const results = await db.query.mailings.findMany({
+      orderBy: asc(mailings.mailDate),
+      columns: {
+        mailDate: true,
+        createdAt: true,
+      },
+    });
+
+    // Generate last 12 months including current month
+    const months: { month: string; count: number }[] = [];
+    const now = new Date();
+    
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthLabel = d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+      months.push({ month: monthLabel, count: 0 });
+    }
+
+    // Count mailings per month
+    for (const mailing of results) {
+      const date = mailing.mailDate ? new Date(mailing.mailDate) : mailing.createdAt ? new Date(mailing.createdAt) : null;
+      if (!date) continue;
+      
+      const monthLabel = date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+      const monthEntry = months.find(m => m.month === monthLabel);
+      if (monthEntry) {
+        monthEntry.count++;
+      }
+    }
+
+    res.json(successResponse(months));
+  } catch (error) {
+    console.error('Error fetching mail volume by month:', error);
+    res.status(500).json(errorResponse('Failed to fetch mail volume by month'));
+  }
+});
+
 // GET /api/dashboard/stats - Overview: total properties, owners, mailings, response rate
 router.get('/dashboard/stats', async (req, res) => {
   try {

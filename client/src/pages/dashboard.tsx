@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
-import { useDashboardStats, useMailingStatsByState } from '../hooks/use-api.ts';
+import { useDashboardStats, useMailingStatsByState, useMailVolumeByMonth } from '../hooks/use-api.ts';
 import {
   Building,
   Users,
@@ -22,6 +22,8 @@ import {
   PieChart,
   Pie,
   Cell,
+  LineChart,
+  Line,
 } from 'recharts';
 import { formatNumber, formatCurrency, formatPercent } from '../lib/format.ts';
 
@@ -30,9 +32,11 @@ const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'
 export function Dashboard() {
   const { data: statsData, isLoading: statsLoading } = useDashboardStats();
   const { data: stateStatsData, isLoading: stateLoading } = useMailingStatsByState();
+  const { data: mailVolumeData, isLoading: mailVolumeLoading } = useMailVolumeByMonth();
 
   const stats = statsData?.data;
   const stateStats = stateStatsData?.data || [];
+  const mailVolume = mailVolumeData?.data || [];
 
   const overviewCards = stats?.overview
     ? [
@@ -102,7 +106,7 @@ export function Dashboard() {
           </div>
 
           {/* Charts Row */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Properties by State */}
             <Card>
               <CardHeader>
@@ -182,6 +186,39 @@ export function Dashboard() {
                         </div>
                       ))}
                     </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Mail Volume by Month */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Mail Volume by Month</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {mailVolumeLoading ? (
+                  <div className="flex items-center justify-center h-64">
+                    <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+                  </div>
+                ) : mailVolume.length === 0 ? (
+                  <div className="text-center py-12 text-gray-500">
+                    <p>No mailing data available</p>
+                  </div>
+                ) : (
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={mailVolume}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <XAxis dataKey="month" tick={{ fontSize: 10 }} angle={-45} textAnchor="end" height={60} />
+                        <YAxis tick={{ fontSize: 12 }} />
+                        <Tooltip
+                          formatter={(value: number) => [formatNumber(value), 'Mailings']}
+                          contentStyle={{ borderRadius: 8, border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                        />
+                        <Line type="monotone" dataKey="count" stroke="#f59e0b" strokeWidth={3} dot={{ fill: '#f59e0b', r: 4 }} activeDot={{ r: 6 }} />
+                      </LineChart>
+                    </ResponsiveContainer>
                   </div>
                 )}
               </CardContent>
