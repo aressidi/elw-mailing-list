@@ -270,6 +270,60 @@ router.get('/properties/:id', async (req, res) => {
   }
 });
 
+// POST /api/properties/bulk - Bulk create properties
+router.post('/properties/bulk', async (req, res) => {
+  try {
+    const { properties: propertiesList } = req.body;
+
+    if (!Array.isArray(propertiesList) || propertiesList.length === 0) {
+      return res.status(400).json(errorResponse('properties array is required and must not be empty', 400));
+    }
+
+    const createdIds: number[] = [];
+    let created = 0;
+    let duplicates = 0;
+
+    for (const prop of propertiesList) {
+      // Check for duplicate by APN
+      const existing = await db
+        .select()
+        .from(properties)
+        .where(eq(properties.apn, prop.apn))
+        .limit(1);
+
+      if (existing.length > 0) {
+        duplicates++;
+        continue;
+      }
+
+      const result = await db.insert(properties).values({
+        apn: prop.apn,
+        state: prop.state,
+        county: prop.county,
+        acres: prop.acres,
+        legalDescription: prop.legalDescription,
+        zip: prop.zip,
+        latitude: prop.latitude,
+        longitude: prop.longitude,
+      }).returning();
+
+      if (result[0]) {
+        createdIds.push(result[0].id);
+        created++;
+      }
+    }
+
+    res.status(201).json(successResponse({
+      created,
+      duplicates,
+      ids: createdIds,
+    }));
+  } catch (error) {
+    console.error('Error bulk creating properties:', error);
+    res.status(500).json(errorResponse('Failed to bulk create properties'));
+  }
+});
+
 // ============================================================
 // Owners Routes
 // ============================================================
@@ -416,6 +470,58 @@ router.get('/owners/:id', async (req, res) => {
   }
 });
 
+// POST /api/owners/bulk - Bulk create owners
+router.post('/owners/bulk', async (req, res) => {
+  try {
+    const { owners: ownersList } = req.body;
+
+    if (!Array.isArray(ownersList) || ownersList.length === 0) {
+      return res.status(400).json(errorResponse('owners array is required and must not be empty', 400));
+    }
+
+    // Pre-fetch all existing owner names for duplicate detection
+    const allOwners = await db.select({ id: owners.id, ownerName: owners.ownerName }).from(owners);
+    const existingNormalizedNames = new Set(
+      allOwners.map(o => o.ownerName.replace(/\s+/g, '').toLowerCase())
+    );
+
+    const createdIds: number[] = [];
+    let created = 0;
+    let duplicates = 0;
+
+    for (const owner of ownersList) {
+      const normalizedName = owner.ownerName?.replace(/\s+/g, '').toLowerCase();
+
+      if (!normalizedName || existingNormalizedNames.has(normalizedName)) {
+        duplicates++;
+        continue;
+      }
+
+      const result = await db.insert(owners).values({
+        ownerName: owner.ownerName,
+        firstName: owner.firstName,
+        lastName: owner.lastName,
+        ownerType: owner.ownerType,
+      }).returning();
+
+      if (result[0]) {
+        createdIds.push(result[0].id);
+        created++;
+        existingNormalizedNames.add(normalizedName);
+      }
+    }
+
+    res.status(201).json(successResponse({
+      created,
+      duplicates,
+      ids: createdIds,
+    }));
+  } catch (error) {
+    console.error('Error bulk creating owners:', error);
+    res.status(500).json(errorResponse('Failed to bulk create owners'));
+  }
+});
+
 // ============================================================
 // Campaigns Routes
 // ============================================================
@@ -493,6 +599,38 @@ router.get('/campaigns/:id', async (req, res) => {
   }
 });
 
+// POST /api/campaigns - Create single campaign
+router.post('/campaigns', async (req, res) => {
+  try {
+    const { name, link } = req.body;
+
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      return res.status(400).json(errorResponse('name is required', 400));
+    }
+
+    // Check if campaign with same name exists
+    const existing = await db
+      .select()
+      .from(campaigns)
+      .where(eq(campaigns.name, name.trim()))
+      .limit(1);
+
+    if (existing.length > 0) {
+      return res.status(409).json(errorResponse('Campaign with this name already exists', 409));
+    }
+
+    const result = await db.insert(campaigns).values({
+      name: name.trim(),
+      link,
+    }).returning();
+
+    res.status(201).json(successResponse(result[0]));
+  } catch (error) {
+    console.error('Error creating campaign:', error);
+    res.status(500).json(errorResponse('Failed to create campaign'));
+  }
+});
+
 // ============================================================
 // Mailings Routes
 // ============================================================
@@ -551,6 +689,59 @@ router.get('/mailings', async (req, res) => {
   } catch (error) {
     console.error('Error fetching mailings:', error);
     res.status(500).json(errorResponse('Failed to fetch mailings'));
+  }
+});
+
+// POST /api/mailings/bulk - Bulk create mailings
+router.post('/mailings/bulk', async (req, res) => {
+  try {
+    const { campaignId, mailings: mailingsList } = req.body;
+
+    if (!campaignId || typeof campaignId !== 'number') {
+      return res.status(400).json(errorResponse('campaignId is required and must be a number', 400));
+    }
+
+    if (!Array.isArray(mailingsList) || mailingsList.length === 0) {
+      return res.status(400).json(errorResponse('mailings array is required and must not be empty', 400));
+    }
+
+    // Verify campaign exists
+    const campaign = await db
+      .select()
+      .from(campaigns)
+      .where(eq(campaigns.id, campaignId))
+      .limit(1);
+
+    if (campaign.length === 0) {
+      return res.status(404).json(errorResponse('Campaign not found', 404));
+    }
+
+    const createdIds: number[] = [];
+    let created = 0;
+
+    for (const mailing of mailingsList) {
+      const result = await db.insert(mailings).values({
+        campaignId,
+        propertyId: mailing.propertyId,
+        ownerId: mailing.ownerId,
+        mailingAddressId: mailing.mailingAddressId,
+        mailDate: mailing.mailDate ? new Date(mailing.mailDate) : null,
+        offerPrice: mailing.offerPrice,
+      }).returning();
+
+      if (result[0]) {
+        createdIds.push(result[0].id);
+        created++;
+      }
+    }
+
+    res.status(201).json(successResponse({
+      created,
+      ids: createdIds,
+    }));
+  } catch (error) {
+    console.error('Error bulk creating mailings:', error);
+    res.status(500).json(errorResponse('Failed to bulk create mailings'));
   }
 });
 
