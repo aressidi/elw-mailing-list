@@ -110,18 +110,69 @@ export function useCampaign(id: number | string) {
 }
 
 // ─── Mailings ────────────────────────────────────────────────
-export function useMailings(params?: { page?: number; limit?: number; campaignId?: number; state?: string; startDate?: string; endDate?: string }) {
+export function useMailings(params?: {
+  page?: number;
+  limit?: number;
+  campaignId?: number;
+  state?: string;
+  county?: string;
+  search?: string;
+  startDate?: string;
+  endDate?: string;
+  sortBy?: string;
+  sortOrder?: string;
+  raw?: boolean;
+}) {
   const query = new URLSearchParams();
   if (params?.page) query.set('page', String(params.page));
   if (params?.limit) query.set('limit', String(params.limit));
   if (params?.campaignId) query.set('campaignId', String(params.campaignId));
   if (params?.state) query.set('state', params.state);
+  if (params?.county) query.set('county', params.county);
+  if (params?.search) query.set('search', params.search);
   if (params?.startDate) query.set('startDate', params.startDate);
   if (params?.endDate) query.set('endDate', params.endDate);
+  if (params?.sortBy) query.set('sortBy', params.sortBy);
+  if (params?.sortOrder) query.set('sortOrder', params.sortOrder);
+  if (params?.raw !== undefined) query.set('raw', String(params.raw));
 
   return useQuery({
     queryKey: ['mailings', params],
-    queryFn: () => fetchJson<PaginatedResponse<Mailing[]>>(`${API_BASE}/mailings?${query.toString()}`),
+    queryFn: () =>
+      fetchJson<PaginatedResponse<AggregatedMailing[] | Mailing[]>>(
+        `${API_BASE}/mailings?${query.toString()}`
+      ),
+  });
+}
+
+export function useAggregatedMailings(params?: {
+  page?: number;
+  limit?: number;
+  state?: string;
+  county?: string;
+  search?: string;
+  startDate?: string;
+  endDate?: string;
+  sortBy?: string;
+  sortOrder?: string;
+}) {
+  const query = new URLSearchParams();
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
+  if (params?.state) query.set('state', params.state);
+  if (params?.county) query.set('county', params.county);
+  if (params?.search) query.set('search', params.search);
+  if (params?.startDate) query.set('startDate', params.startDate);
+  if (params?.endDate) query.set('endDate', params.endDate);
+  if (params?.sortBy) query.set('sortBy', params.sortBy);
+  if (params?.sortOrder) query.set('sortOrder', params.sortOrder);
+
+  return useQuery({
+    queryKey: ['mailings', 'aggregated', params],
+    queryFn: () =>
+      fetchJson<PaginatedResponse<AggregatedMailing[]>>(
+        `${API_BASE}/mailings?${query.toString()}`
+      ),
   });
 }
 
@@ -243,6 +294,25 @@ export interface Campaign {
   name: string;
   link: string | null;
   createdAt: string;
+}
+
+export interface AggregatedMailing {
+  id: number;
+  campaignId: number;
+  name: string;
+  campaignName: string;
+  googleSheetLink: string | null;
+  mailDate: string | null;
+  latestMailDate: string | null;
+  totalMailings: number;
+  totalOwners: number;
+  totalProperties: number;
+  totalOfferAmount: number;
+  states: string[];
+  counties: string[];
+  leadsCount: number;
+  dealsCount: number;
+  suppressionsCount: number;
 }
 
 export interface Mailing {
