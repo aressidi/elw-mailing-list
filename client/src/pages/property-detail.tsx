@@ -1,9 +1,9 @@
 import { useParams, Link } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
-import { Table, TableHead, TableBody, TableRow, TableHeader, TableCell } from '../components/ui/Table.tsx';
-import { useProperty } from '../hooks/use-api.ts';
-import { formatAcreage, formatDate, formatCurrency, formatNumber } from '../lib/format.ts';
+import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
+import { useProperty, Mailing, Deal } from '../hooks/use-api.ts';
+import { formatAcreage, formatDate, formatCurrency } from '../lib/format.ts';
 import { ArrowLeft, MapPin, Users, Send, TrendingUp, Loader2 } from 'lucide-react';
 
 export function PropertyDetail() {
@@ -35,6 +35,79 @@ export function PropertyDetail() {
   const owners = property.propertyOwners?.map((po) => po.owner) || [];
   const mailings = property.mailings || [];
   const deals = property.deals || [];
+
+  const mailingColumns: ColumnDef<Mailing>[] = [
+    {
+      id: 'campaign',
+      header: 'Campaign',
+      accessorFn: (row) => row.campaign?.name || '',
+      filterType: 'text',
+      cell: (row) => row.campaign?.name || '-',
+    },
+    {
+      id: 'mailDate',
+      header: 'Mail Date',
+      accessorKey: 'mailDate',
+      filterType: 'date',
+      cell: (row) => formatDate(row.mailDate),
+    },
+    {
+      id: 'offerPrice',
+      header: 'Offer Price',
+      accessorKey: 'offerPrice',
+      filterType: 'number',
+      align: 'right',
+      cell: (row) => (row.offerPrice ? formatCurrency(Number(row.offerPrice)) : '-'),
+      comparator: (a, b) => (Number(a.offerPrice) || 0) - (Number(b.offerPrice) || 0),
+    },
+    {
+      id: 'createdAt',
+      header: 'Created',
+      accessorKey: 'createdAt',
+      filterType: 'date',
+      cell: (row) => formatDate(row.createdAt),
+    },
+  ];
+
+  const dealColumns: ColumnDef<Deal>[] = [
+    {
+      id: 'hitType',
+      header: 'Type',
+      accessorKey: 'hitType',
+      filterType: 'text',
+      cell: (row) => <Badge variant="secondary" className="capitalize">{row.hitType}</Badge>,
+    },
+    {
+      id: 'hitDate',
+      header: 'Date',
+      accessorKey: 'hitDate',
+      filterType: 'date',
+      cell: (row) => formatDate(row.hitDate),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      accessorFn: (row) => (row.isConversion ? 'converted' : row.isLead ? 'lead' : 'touch'),
+      filterType: 'select',
+      filterOptions: [
+        { value: 'converted', label: 'Converted' },
+        { value: 'lead', label: 'Lead' },
+        { value: 'touch', label: 'Touch' },
+      ],
+      cell: (row) => {
+        if (row.isConversion) return <Badge variant="success">Converted</Badge>;
+        if (row.isLead) return <Badge variant="warning">Lead</Badge>;
+        return <Badge variant="secondary">Touch</Badge>;
+      },
+    },
+    {
+      id: 'createdAt',
+      header: 'Created',
+      accessorKey: 'createdAt',
+      filterType: 'date',
+      cell: (row) => formatDate(row.createdAt),
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -142,35 +215,14 @@ export function PropertyDetail() {
             Mailing History ({mailings.length})
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
-          {mailings.length === 0 ? (
-            <p className="text-gray-500 py-4 px-6">No mailings for this property</p>
-          ) : (
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeader>Campaign</TableHeader>
-                  <TableHeader>Mail Date</TableHeader>
-                  <TableHeader className="text-right">Offer Price</TableHeader>
-                  <TableHeader>Created</TableHeader>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {mailings.map((mailing) => (
-                  <TableRow key={mailing.id}>
-                    <TableCell>
-                      {mailing.campaign?.name || '-'}
-                    </TableCell>
-                    <TableCell>{formatDate(mailing.mailDate)}</TableCell>
-                    <TableCell className="text-right">
-                      {mailing.offerPrice ? formatCurrency(Number(mailing.offerPrice)) : '-'}
-                    </TableCell>
-                    <TableCell>{formatDate(mailing.createdAt)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+        <CardContent className="p-4">
+          <DataTable
+            data={mailings}
+            columns={mailingColumns}
+            storageKey={`property_${property.id}_mailings`}
+            emptyIcon={<Send className="w-8 h-8" />}
+            emptyText="No mailings for this property"
+          />
         </CardContent>
       </Card>
 
@@ -182,41 +234,14 @@ export function PropertyDetail() {
             Deal & Response History ({deals.length})
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
-          {deals.length === 0 ? (
-            <p className="text-gray-500 py-4 px-6">No deals for this property</p>
-          ) : (
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeader>Type</TableHeader>
-                  <TableHeader>Date</TableHeader>
-                  <TableHeader>Status</TableHeader>
-                  <TableHeader>Created</TableHeader>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {deals.map((deal) => (
-                  <TableRow key={deal.id}>
-                    <TableCell>
-                      <Badge variant="secondary">{deal.hitType}</Badge>
-                    </TableCell>
-                    <TableCell>{formatDate(deal.hitDate)}</TableCell>
-                    <TableCell>
-                      {deal.isConversion ? (
-                        <Badge variant="success">Converted</Badge>
-                      ) : deal.isLead ? (
-                        <Badge variant="warning">Lead</Badge>
-                      ) : (
-                        <Badge variant="default">Touch</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>{formatDate(deal.createdAt)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+        <CardContent className="p-4">
+          <DataTable
+            data={deals}
+            columns={dealColumns}
+            storageKey={`property_${property.id}_deals`}
+            emptyIcon={<TrendingUp className="w-8 h-8" />}
+            emptyText="No deals for this property"
+          />
         </CardContent>
       </Card>
     </div>

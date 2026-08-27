@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
-import { Table, TableHead, TableBody, TableRow, TableHeader, TableCell } from '../components/ui/Table.tsx';
-import { Pagination } from '../components/ui/Pagination.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
-import { useSuppression, useAddSuppression, useOwners, useProperties } from '../hooks/use-api.ts';
+import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
+import { useSuppression, useAddSuppression, useOwners, useProperties, SuppressionRecord } from '../hooks/use-api.ts';
 import { formatDate } from '../lib/format.ts';
 import { Ban, Plus, Loader2, AlertCircle, CheckCircle, X } from 'lucide-react';
 
@@ -27,7 +26,7 @@ export function Suppression() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  const { data, isLoading } = useSuppression({ page, limit: 20 });
+  const { data, isLoading } = useSuppression({ page, limit: 100 });
   const addSuppression = useAddSuppression();
 
   // For form lookups
@@ -71,12 +70,94 @@ export function Suppression() {
     }
   };
 
+  const columns: ColumnDef<SuppressionRecord>[] = [
+    {
+      id: 'id',
+      header: 'ID',
+      accessorKey: 'id',
+      filterType: 'number',
+      headerClassName: 'w-16',
+    },
+    {
+      id: 'owner',
+      header: 'Owner',
+      accessorFn: (row) => row.owner?.ownerName || '',
+      filterType: 'text',
+      cell: (row) =>
+        row.owner ? (
+          <Link href={`/owners/${row.owner.id}`}>
+            <span className="font-medium text-blue-600 hover:underline">
+              {row.owner.ownerName}
+            </span>
+          </Link>
+        ) : (
+          '-'
+        ),
+    },
+    {
+      id: 'property',
+      header: 'Property (APN)',
+      accessorFn: (row) => row.property?.apn || '',
+      filterType: 'text',
+      cell: (row) =>
+        row.property ? (
+          <Link href={`/properties/${row.property.id}`}>
+            <span className="font-medium text-blue-600 hover:underline">
+              {row.property.apn}
+            </span>
+          </Link>
+        ) : (
+          '-'
+        ),
+    },
+    {
+      id: 'state',
+      header: 'State',
+      accessorFn: (row) => row.property?.state || '',
+      filterType: 'text',
+      cell: (row) =>
+        row.property?.state ? (
+          <Badge variant="secondary">{row.property.state}</Badge>
+        ) : (
+          '-'
+        ),
+    },
+    {
+      id: 'reason',
+      header: 'Reason',
+      accessorKey: 'reason',
+      filterType: 'select',
+      filterOptions: REASON_OPTIONS,
+      cell: (row) => (
+        <Badge
+          variant={
+            row.reason === 'do_not_mail'
+              ? 'error'
+              : row.reason === 'bad_address'
+              ? 'warning'
+              : 'secondary'
+          }
+          className="capitalize"
+        >
+          {row.reason.replace(/_/g, ' ')}
+        </Badge>
+      ),
+    },
+    {
+      id: 'createdAt',
+      header: 'Created Date',
+      accessorKey: 'createdAt',
+      filterType: 'date',
+      cell: (row) => formatDate(row.createdAt),
+    },
+  ];
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Suppression</h2>
-          <p className="text-gray-600 mt-1">Manage do-not-mail and suppressed records</p>
+          <p className="text-gray-600 mt-1">Manage do-not-mail, deceased, and suppressed records</p>
         </div>
         <button
           onClick={() => {
@@ -204,83 +285,20 @@ export function Suppression() {
             Suppressed Records
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="p-4">
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
             </div>
-          ) : !suppressions.length ? (
-            <div className="text-center py-12 text-gray-500">
-              <Ban className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-              <p>No suppressed records found</p>
-            </div>
           ) : (
-            <>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableHeader>ID</TableHeader>
-                    <TableHeader>Owner</TableHeader>
-                    <TableHeader>Property</TableHeader>
-                    <TableHeader>Reason</TableHeader>
-                    <TableHeader>Created</TableHeader>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {suppressions.map((sup) => (
-                    <TableRow key={sup.id}>
-                      <TableCell>{sup.id}</TableCell>
-                      <TableCell>
-                        {sup.owner ? (
-                          <Link href={`/owners/${sup.owner.id}`}>
-                            <span className="text-blue-600 hover:underline">
-                              {sup.owner.ownerName}
-                            </span>
-                          </Link>
-                        ) : (
-                          '-'
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {sup.property ? (
-                          <Link href={`/properties/${sup.property.id}`}>
-                            <span className="text-blue-600 hover:underline">
-                              {sup.property.apn}
-                            </span>
-                          </Link>
-                        ) : (
-                          '-'
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            sup.reason === 'do_not_mail'
-                              ? 'error'
-                              : sup.reason === 'bad_address'
-                              ? 'warning'
-                              : 'secondary'
-                          }
-                        >
-                          {sup.reason.replace(/_/g, ' ')}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{formatDate(sup.createdAt)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-
-              {pagination && pagination.totalPages > 1 && (
-                <div className="p-4 border-t border-gray-200">
-                  <Pagination
-                    page={pagination.page}
-                    totalPages={pagination.totalPages}
-                    onPageChange={setPage}
-                  />
-                </div>
-              )}
-            </>
+            <DataTable
+              data={suppressions}
+              columns={columns}
+              storageKey="suppression_view"
+              emptyIcon={<Ban className="w-12 h-12" />}
+              emptyText="No suppressed records found"
+              emptySubtext="Try adjusting your column filters or search"
+            />
           )}
         </CardContent>
       </Card>

@@ -7,6 +7,7 @@ import { OwnerDetail } from './pages/owner-detail.tsx';
 import { Campaigns } from './pages/campaigns.tsx';
 import { CampaignDetail } from './pages/campaign-detail.tsx';
 import { Mailings } from './pages/mailings.tsx';
+import { Deals } from './pages/deals.tsx';
 import { Suppression } from './pages/suppression.tsx';
 import { Layout } from './components/Layout.tsx';
 
@@ -15,13 +16,15 @@ function App() {
     <Layout>
       <Switch>
         <Route path="/" component={Dashboard} />
-        <Route path="/properties" component={Properties} />
-        <Route path="/properties/:id" component={PropertyDetail} />
         <Route path="/owners" component={Owners} />
         <Route path="/owners/:id" component={OwnerDetail} />
+        <Route path="/properties" component={Properties} />
+        <Route path="/properties/:id" component={PropertyDetail} />
+        <Route path="/mailings" component={Mailings} />
         <Route path="/campaigns" component={Campaigns} />
         <Route path="/campaigns/:id" component={CampaignDetail} />
-        <Route path="/mailings" component={Mailings} />
+        <Route path="/deals" component={Deals} />
+        <Route path="/leads" component={Deals} />
         <Route path="/suppression" component={Suppression} />
         <Route>
           <div className="p-8 text-center">

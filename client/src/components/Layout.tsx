@@ -7,6 +7,7 @@ import {
   Send,
   Megaphone,
   Ban,
+  TrendingUp,
   Settings,
   Menu,
   X,
@@ -19,10 +20,11 @@ interface LayoutProps {
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: Home },
-  { href: '/properties', label: 'Properties', icon: MapPin },
   { href: '/owners', label: 'Owners', icon: Users },
-  { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
+  { href: '/properties', label: 'Properties', icon: MapPin },
   { href: '/mailings', label: 'Mailings', icon: Send },
+  { href: '/deals', label: 'Leads / Deals', icon: TrendingUp },
+  { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
   { href: '/suppression', label: 'Suppression', icon: Ban },
 ];
 

@@ -1,8 +1,8 @@
 import { useParams, Link } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
-import { Table, TableHead, TableBody, TableRow, TableHeader, TableCell } from '../components/ui/Table.tsx';
-import { useCampaign } from '../hooks/use-api.ts';
+import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
+import { useCampaign, Mailing } from '../hooks/use-api.ts';
 import { formatDate, formatCurrency, formatNumber } from '../lib/format.ts';
 import { ArrowLeft, Megaphone, Send, ExternalLink, Loader2 } from 'lucide-react';
 
@@ -35,6 +35,83 @@ export function CampaignDetail() {
   const mailings = campaign.mailings || [];
   const stats = campaign.stats;
 
+  const mailingColumns: ColumnDef<Mailing>[] = [
+    {
+      id: 'owner',
+      header: 'Owner',
+      accessorFn: (row) => row.owner?.ownerName || '',
+      filterType: 'text',
+      cell: (row) =>
+        row.owner ? (
+          <Link href={`/owners/${row.owner.id}`}>
+            <span className="text-blue-600 hover:underline font-medium">
+              {row.owner.ownerName}
+            </span>
+          </Link>
+        ) : (
+          '-'
+        ),
+    },
+    {
+      id: 'property',
+      header: 'Property (APN)',
+      accessorFn: (row) => row.property?.apn || '',
+      filterType: 'text',
+      cell: (row) =>
+        row.property ? (
+          <Link href={`/properties/${row.property.id}`}>
+            <span className="text-blue-600 hover:underline font-mono">
+              {row.property.apn}
+            </span>
+          </Link>
+        ) : (
+          '-'
+        ),
+    },
+    {
+      id: 'address',
+      header: 'Address',
+      accessorFn: (row) => {
+        if (!row.mailingAddress) return '';
+        const parts = [
+          row.mailingAddress.addressLine1,
+          row.mailingAddress.city,
+          row.mailingAddress.state,
+          row.mailingAddress.zip,
+        ].filter(Boolean);
+        return parts.join(', ');
+      },
+      filterType: 'text',
+      cell: (row) => {
+        if (!row.mailingAddress) return '-';
+        return (
+          <span className="text-xs text-gray-600">
+            {row.mailingAddress.addressLine1}
+            {row.mailingAddress.city && <>, {row.mailingAddress.city}</>}
+            {row.mailingAddress.state && <>, {row.mailingAddress.state}</>}
+            {row.mailingAddress.zip && <> {row.mailingAddress.zip}</>}
+          </span>
+        );
+      },
+    },
+    {
+      id: 'mailDate',
+      header: 'Mail Date',
+      accessorKey: 'mailDate',
+      filterType: 'date',
+      cell: (row) => formatDate(row.mailDate),
+    },
+    {
+      id: 'offerPrice',
+      header: 'Offer Price',
+      accessorKey: 'offerPrice',
+      filterType: 'number',
+      align: 'right',
+      cell: (row) => (row.offerPrice ? formatCurrency(Number(row.offerPrice)) : '-'),
+      comparator: (a, b) => (Number(a.offerPrice) || 0) - (Number(b.offerPrice) || 0),
+    },
+  ];
+
   return (
     <div className="space-y-6">
       {/* Back link */}
@@ -60,7 +137,7 @@ export function CampaignDetail() {
               rel="noopener noreferrer"
               className="flex items-center gap-1 text-sm text-blue-600 hover:underline"
             >
-              <ExternalLink className="w-3 h-3" />
+              <ExternalLink className="w-3.5 h-3.5" />
               Campaign Link
             </a>
           )}
@@ -99,69 +176,14 @@ export function CampaignDetail() {
             Mailing List ({mailings.length})
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
-          {mailings.length === 0 ? (
-            <p className="text-gray-500 py-4 px-6">No mailings in this campaign</p>
-          ) : (
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeader>Owner</TableHeader>
-                  <TableHeader>Property</TableHeader>
-                  <TableHeader>Address</TableHeader>
-                  <TableHeader>Mail Date</TableHeader>
-                  <TableHeader className="text-right">Offer Price</TableHeader>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {mailings.map((mailing) => (
-                  <TableRow key={mailing.id}>
-                    <TableCell>
-                      {mailing.owner ? (
-                        <Link href={`/owners/${mailing.owner.id}`}>
-                          <span className="text-blue-600 hover:underline">
-                            {mailing.owner.ownerName}
-                          </span>
-                        </Link>
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {mailing.property ? (
-                        <Link href={`/properties/${mailing.property.id}`}>
-                          <span className="text-blue-600 hover:underline">
-                            {mailing.property.apn}
-                          </span>
-                        </Link>
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {mailing.mailingAddress ? (
-                        <span className="text-sm">
-                          {mailing.mailingAddress.addressLine1}
-                          {mailing.mailingAddress.city && (
-                            <>, {mailing.mailingAddress.city}</>
-                          )}
-                          {mailing.mailingAddress.state && (
-                            <>, {mailing.mailingAddress.state}</>
-                          )}
-                        </span>
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                    <TableCell>{formatDate(mailing.mailDate)}</TableCell>
-                    <TableCell className="text-right">
-                      {mailing.offerPrice ? formatCurrency(Number(mailing.offerPrice)) : '-'}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+        <CardContent className="p-4">
+          <DataTable
+            data={mailings}
+            columns={mailingColumns}
+            storageKey={`campaign_${campaign.id}_mailings`}
+            emptyIcon={<Send className="w-8 h-8" />}
+            emptyText="No mailings in this campaign"
+          />
         </CardContent>
       </Card>
     </div>

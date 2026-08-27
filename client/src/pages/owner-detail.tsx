@@ -1,8 +1,8 @@
 import { useParams, Link } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
-import { Table, TableHead, TableBody, TableRow, TableHeader, TableCell } from '../components/ui/Table.tsx';
-import { useOwner } from '../hooks/use-api.ts';
+import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
+import { useOwner, Mailing, Deal, Property } from '../hooks/use-api.ts';
 import { formatDate, formatCurrency } from '../lib/format.ts';
 import { ArrowLeft, Users, MapPin, Send, TrendingUp, Ban, Loader2, Mail } from 'lucide-react';
 
@@ -38,6 +38,134 @@ export function OwnerDetail() {
   const deals = owner.deals || [];
   const suppressions = owner.suppressions || [];
 
+  const propertyColumns: ColumnDef<Property>[] = [
+    {
+      id: 'apn',
+      header: 'APN',
+      accessorKey: 'apn',
+      filterType: 'text',
+      cell: (row) => (
+        <Link href={`/properties/${row.id}`}>
+          <span className="font-medium text-blue-600 hover:underline">
+            {row.apn}
+          </span>
+        </Link>
+      ),
+    },
+    {
+      id: 'state',
+      header: 'State',
+      accessorKey: 'state',
+      filterType: 'text',
+      cell: (row) => (row.state ? <Badge variant="secondary">{row.state}</Badge> : '-'),
+    },
+    {
+      id: 'county',
+      header: 'County',
+      accessorKey: 'county',
+      filterType: 'text',
+      cell: (row) => row.county || '-',
+    },
+    {
+      id: 'zip',
+      header: 'ZIP',
+      accessorKey: 'zip',
+      filterType: 'text',
+      cell: (row) => row.zip || '-',
+    },
+  ];
+
+  const mailingColumns: ColumnDef<Mailing>[] = [
+    {
+      id: 'campaign',
+      header: 'Campaign',
+      accessorFn: (row) => row.campaign?.name || '',
+      filterType: 'text',
+      cell: (row) => row.campaign?.name || '-',
+    },
+    {
+      id: 'property',
+      header: 'Property (APN)',
+      accessorFn: (row) => row.property?.apn || '',
+      filterType: 'text',
+      cell: (row) =>
+        row.property ? (
+          <Link href={`/properties/${row.property.id}`}>
+            <span className="text-blue-600 hover:underline">
+              {row.property.apn}
+            </span>
+          </Link>
+        ) : (
+          '-'
+        ),
+    },
+    {
+      id: 'mailDate',
+      header: 'Mail Date',
+      accessorKey: 'mailDate',
+      filterType: 'date',
+      cell: (row) => formatDate(row.mailDate),
+    },
+    {
+      id: 'offerPrice',
+      header: 'Offer Price',
+      accessorKey: 'offerPrice',
+      filterType: 'number',
+      align: 'right',
+      cell: (row) => (row.offerPrice ? formatCurrency(Number(row.offerPrice)) : '-'),
+      comparator: (a, b) => (Number(a.offerPrice) || 0) - (Number(b.offerPrice) || 0),
+    },
+  ];
+
+  const dealColumns: ColumnDef<Deal>[] = [
+    {
+      id: 'hitType',
+      header: 'Type',
+      accessorKey: 'hitType',
+      filterType: 'text',
+      cell: (row) => <Badge variant="secondary" className="capitalize">{row.hitType}</Badge>,
+    },
+    {
+      id: 'property',
+      header: 'Property (APN)',
+      accessorFn: (row) => row.property?.apn || '',
+      filterType: 'text',
+      cell: (row) =>
+        row.property ? (
+          <Link href={`/properties/${row.property.id}`}>
+            <span className="text-blue-600 hover:underline">
+              {row.property.apn}
+            </span>
+          </Link>
+        ) : (
+          '-'
+        ),
+    },
+    {
+      id: 'hitDate',
+      header: 'Date',
+      accessorKey: 'hitDate',
+      filterType: 'date',
+      cell: (row) => formatDate(row.hitDate),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      accessorFn: (row) => (row.isConversion ? 'converted' : row.isLead ? 'lead' : 'touch'),
+      filterType: 'select',
+      filterOptions: [
+        { value: 'converted', label: 'Converted' },
+        { value: 'lead', label: 'Lead' },
+        { value: 'touch', label: 'Touch' },
+      ],
+      cell: (row) => {
+        if (row.isConversion) return <Badge variant="success">Converted</Badge>;
+        if (row.isLead) return <Badge variant="warning">Lead</Badge>;
+        return <Badge variant="secondary">Touch</Badge>;
+      },
+    },
+  ];
+
   return (
     <div className="space-y-6">
       {/* Back link */}
@@ -55,7 +183,7 @@ export function OwnerDetail() {
           <h2 className="text-2xl font-bold text-gray-900">{owner.ownerName}</h2>
         </div>
         <div className="flex items-center gap-2 mt-2">
-          <Badge variant="secondary">{owner.ownerType}</Badge>
+          <Badge variant="secondary" className="capitalize">{owner.ownerType}</Badge>
           {suppressions.length > 0 && <Badge variant="error">Suppressed</Badge>}
         </div>
       </div>
@@ -119,43 +247,14 @@ export function OwnerDetail() {
             Owned Properties ({properties.length})
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
-          {properties.length === 0 ? (
-            <p className="text-gray-500 py-4 px-6">No properties owned</p>
-          ) : (
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeader>APN</TableHeader>
-                  <TableHeader>State</TableHeader>
-                  <TableHeader>County</TableHeader>
-                  <TableHeader>ZIP</TableHeader>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {properties.map((property) => (
-                  <TableRow key={property.id}>
-                    <TableCell>
-                      <Link href={`/properties/${property.id}`}>
-                        <span className="font-medium text-blue-600 hover:underline">
-                          {property.apn}
-                        </span>
-                      </Link>
-                    </TableCell>
-                    <TableCell>
-                      {property.state ? (
-                        <Badge variant="secondary">{property.state}</Badge>
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                    <TableCell>{property.county || '-'}</TableCell>
-                    <TableCell>{property.zip || '-'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+        <CardContent className="p-4">
+          <DataTable
+            data={properties}
+            columns={propertyColumns}
+            storageKey={`owner_${owner.id}_properties`}
+            emptyIcon={<MapPin className="w-8 h-8" />}
+            emptyText="No properties owned"
+          />
         </CardContent>
       </Card>
 
@@ -167,43 +266,14 @@ export function OwnerDetail() {
             Mailing History ({mailings.length})
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
-          {mailings.length === 0 ? (
-            <p className="text-gray-500 py-4 px-6">No mailings for this owner</p>
-          ) : (
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeader>Campaign</TableHeader>
-                  <TableHeader>Property</TableHeader>
-                  <TableHeader>Mail Date</TableHeader>
-                  <TableHeader className="text-right">Offer Price</TableHeader>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {mailings.map((mailing) => (
-                  <TableRow key={mailing.id}>
-                    <TableCell>{mailing.campaign?.name || '-'}</TableCell>
-                    <TableCell>
-                      {mailing.property ? (
-                        <Link href={`/properties/${mailing.property.id}`}>
-                          <span className="text-blue-600 hover:underline">
-                            {mailing.property.apn}
-                          </span>
-                        </Link>
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                    <TableCell>{formatDate(mailing.mailDate)}</TableCell>
-                    <TableCell className="text-right">
-                      {mailing.offerPrice ? formatCurrency(Number(mailing.offerPrice)) : '-'}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+        <CardContent className="p-4">
+          <DataTable
+            data={mailings}
+            columns={mailingColumns}
+            storageKey={`owner_${owner.id}_mailings`}
+            emptyIcon={<Send className="w-8 h-8" />}
+            emptyText="No mailings for this owner"
+          />
         </CardContent>
       </Card>
 
@@ -215,51 +285,14 @@ export function OwnerDetail() {
             Deal History ({deals.length})
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
-          {deals.length === 0 ? (
-            <p className="text-gray-500 py-4 px-6">No deals for this owner</p>
-          ) : (
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeader>Type</TableHeader>
-                  <TableHeader>Property</TableHeader>
-                  <TableHeader>Date</TableHeader>
-                  <TableHeader>Status</TableHeader>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {deals.map((deal) => (
-                  <TableRow key={deal.id}>
-                    <TableCell>
-                      <Badge variant="secondary">{deal.hitType}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      {deal.property ? (
-                        <Link href={`/properties/${deal.property.id}`}>
-                          <span className="text-blue-600 hover:underline">
-                            {deal.property.apn}
-                          </span>
-                        </Link>
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                    <TableCell>{formatDate(deal.hitDate)}</TableCell>
-                    <TableCell>
-                      {deal.isConversion ? (
-                        <Badge variant="success">Converted</Badge>
-                      ) : deal.isLead ? (
-                        <Badge variant="warning">Lead</Badge>
-                      ) : (
-                        <Badge variant="default">Touch</Badge>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+        <CardContent className="p-4">
+          <DataTable
+            data={deals}
+            columns={dealColumns}
+            storageKey={`owner_${owner.id}_deals`}
+            emptyIcon={<TrendingUp className="w-8 h-8" />}
+            emptyText="No deals for this owner"
+          />
         </CardContent>
       </Card>
 
@@ -272,19 +305,19 @@ export function OwnerDetail() {
               Suppression Records ({suppressions.length})
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-4">
             <div className="space-y-3">
               {suppressions.map((sup) => (
                 <div key={sup.id} className="flex items-center justify-between p-3 bg-red-50 rounded-lg">
                   <div>
-                    <Badge variant="error">{sup.reason.replace('_', ' ')}</Badge>
+                    <Badge variant="error" className="capitalize">{sup.reason.replace('_', ' ')}</Badge>
                     <p className="text-sm text-gray-600 mt-1">
                       Created: {formatDate(sup.createdAt)}
                     </p>
                   </div>
                   {sup.property && (
                     <Link href={`/properties/${sup.property.id}`}>
-                      <span className="text-blue-600 hover:underline text-sm">
+                      <span className="text-blue-600 hover:underline text-sm font-mono">
                         {sup.property.apn}
                       </span>
                     </Link>
