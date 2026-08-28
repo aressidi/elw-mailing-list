@@ -120,6 +120,8 @@ export const mailings = pgTable('mailings', {
   mailingAddressIdx: index('mailings_mailing_address_idx').on(table.mailingAddressId),
   campaignIdx: index('mailings_campaign_idx').on(table.campaignId),
   mailDateIdx: index('mailings_mail_date_idx').on(table.mailDate),
+  campaignPropertyIdx: index('mailings_campaign_property_idx').on(table.campaignId, table.propertyId),
+  campaignOwnerIdx: index('mailings_campaign_owner_idx').on(table.campaignId, table.ownerId),
 }));
 
 // ====================

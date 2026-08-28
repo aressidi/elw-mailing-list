@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { eq, and, like, desc, asc, sql, count, isNull, not, or, gte, lte, inArray } from 'drizzle-orm';
-import { db } from './db.js';
+import { db, pool } from './db.js';
 import {
   properties,
   owners,
@@ -635,59 +635,247 @@ router.post('/campaigns', async (req, res) => {
 // Mailings Routes
 // ============================================================
 
-// GET /api/mailings - List all (paginated), filter by campaign/state/date
+// GET /api/mailings - List aggregated campaign/mailer rows (paginated), filterable and sortable
+// Query params: page, limit, state, county, search, startDate, endDate, sortBy, sortOrder, raw (if true, returns individual property mailings)
 router.get('/mailings', async (req, res) => {
   try {
     const { limit, offset, page } = getPagination(req);
-    const { campaignId, state, startDate, endDate, sortBy = 'id', sortOrder = 'desc' } = req.query;
+    const {
+      state,
+      county,
+      search,
+      startDate,
+      endDate,
+      sortBy = 'mailDate',
+      sortOrder = 'desc',
+      raw,
+      campaignId,
+    } = req.query;
 
-    let conditions = [];
-    if (campaignId) conditions.push(eq(mailings.campaignId, parseInt(campaignId as string)));
-    if (startDate) conditions.push(gte(mailings.mailDate, new Date(startDate as string)));
-    if (endDate) conditions.push(lte(mailings.mailDate, new Date(endDate as string)));
+    // If raw=true or raw list is explicitly requested, return legacy individual mailing records
+    if (raw === 'true') {
+      let conditions = [];
+      if (campaignId) conditions.push(eq(mailings.campaignId, parseInt(campaignId as string)));
+      if (startDate) conditions.push(gte(mailings.mailDate, new Date(startDate as string)));
+      if (endDate) conditions.push(lte(mailings.mailDate, new Date(endDate as string)));
 
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    // Get total count
-    const totalResult = await db
-      .select({ count: count() })
-      .from(mailings)
-      .where(whereClause);
-    const total = totalResult[0]?.count || 0;
+      const totalResult = await db
+        .select({ count: count() })
+        .from(mailings)
+        .where(whereClause);
+      const total = totalResult[0]?.count || 0;
 
-    // Get paginated results with relations
-    const results = await db.query.mailings.findMany({
-      where: whereClause,
-      with: {
-        property: true,
-        owner: true,
-        mailingAddress: true,
-        campaign: true,
-      },
-      orderBy: getMailingOrderBy(sortBy as string, sortOrder as string),
-      limit,
-      offset,
-    });
+      const results = await db.query.mailings.findMany({
+        where: whereClause,
+        with: {
+          property: true,
+          owner: true,
+          mailingAddress: true,
+          campaign: true,
+        },
+        orderBy: getMailingOrderBy(sortBy as string, sortOrder as string),
+        limit,
+        offset,
+      });
 
-    // Filter by state if requested (need to filter after fetch as state is in related tables)
-    let filteredResults = results;
-    if (state) {
-      filteredResults = results.filter(m => 
-        m.mailingAddress?.state === state || 
-        m.property?.state === state
+      let filteredResults = results;
+      if (state) {
+        filteredResults = results.filter(
+          (m) => m.mailingAddress?.state === state || m.property?.state === state
+        );
+      }
+
+      return res.json(
+        successResponse(filteredResults, {
+          pagination: {
+            total: state ? filteredResults.length : total,
+            page,
+            limit,
+            totalPages: Math.ceil((state ? filteredResults.length : total) / limit),
+          },
+        })
       );
     }
 
-    res.json(successResponse(filteredResults, {
-      pagination: {
-        total: state ? filteredResults.length : total,
-        page,
-        limit,
-        totalPages: Math.ceil((state ? filteredResults.length : total) / limit),
-      },
+    // Default: Aggregated Mailings (one row per distinct mailer / campaign)
+    const orderDir = String(sortOrder).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    let orderCol = 'mail_date';
+    switch (sortBy) {
+      case 'id':
+      case 'campaignId':
+        orderCol = 'id';
+        break;
+      case 'name':
+      case 'campaignName':
+        orderCol = 'name';
+        break;
+      case 'totalOwners':
+      case 'owners':
+        orderCol = 'total_owners';
+        break;
+      case 'totalMailings':
+      case 'mailings':
+        orderCol = 'total_mailings';
+        break;
+      case 'totalOfferAmount':
+      case 'offerPrice':
+        orderCol = 'total_offer_amount';
+        break;
+      case 'leadsCount':
+      case 'leads':
+        orderCol = 'leads_count';
+        break;
+      case 'dealsCount':
+      case 'deals':
+        orderCol = 'deals_count';
+        break;
+      case 'suppressionsCount':
+      case 'suppressions':
+        orderCol = 'suppressions_count';
+        break;
+      case 'mailDate':
+      default:
+        orderCol = 'mail_date';
+        break;
+    }
+
+    // Dynamic filters
+    const filterClauses: string[] = ['1=1'];
+    const filterParams: any[] = [];
+
+    if (search && typeof search === 'string' && search.trim()) {
+      filterParams.push(`%${search.trim()}%`);
+      const pIdx = filterParams.length;
+      filterClauses.push(
+        `(name ILIKE $${pIdx} OR $${pIdx} = ANY(states) OR $${pIdx} = ANY(counties))`
+      );
+    }
+
+    if (state && typeof state === 'string' && state.trim()) {
+      filterParams.push(state.trim().toUpperCase());
+      const pIdx = filterParams.length;
+      filterClauses.push(`$${pIdx} = ANY(states)`);
+    }
+
+    if (county && typeof county === 'string' && county.trim()) {
+      filterParams.push(`%${county.trim()}%`);
+      const pIdx = filterParams.length;
+      filterClauses.push(
+        `EXISTS (SELECT 1 FROM unnest(counties) c WHERE c ILIKE $${pIdx})`
+      );
+    }
+
+    if (startDate && typeof startDate === 'string') {
+      filterParams.push(startDate);
+      const pIdx = filterParams.length;
+      filterClauses.push(`mail_date >= $${pIdx}::timestamptz`);
+    }
+
+    if (endDate && typeof endDate === 'string') {
+      filterParams.push(endDate);
+      const pIdx = filterParams.length;
+      filterClauses.push(`mail_date <= $${pIdx}::timestamptz`);
+    }
+
+    const whereSql = filterClauses.join(' AND ');
+
+    // Query CTE
+    const aggregatedSql = `
+      WITH aggregated_campaigns AS (
+        SELECT 
+          c.id as id,
+          c.id as campaign_id,
+          c.name as name,
+          c.name as campaign_name,
+          COALESCE(NULLIF(c.link, ''), cs.sample_source_link) as google_sheet_link,
+          MIN(m.mail_date) as mail_date,
+          MAX(m.mail_date) as latest_mail_date,
+          COUNT(m.id)::int as total_mailings,
+          COUNT(DISTINCT m.owner_id)::int as total_owners,
+          COUNT(DISTINCT m.property_id)::int as total_properties,
+          COALESCE(SUM(CAST(m.offer_price AS NUMERIC)), 0)::numeric(14,2) as total_offer_amount,
+          COALESCE(ARRAY_AGG(DISTINCT p.state) FILTER (WHERE p.state IS NOT NULL), ARRAY[]::varchar[]) as states,
+          COALESCE(ARRAY_AGG(DISTINCT p.county) FILTER (WHERE p.county IS NOT NULL), ARRAY[]::varchar[]) as counties,
+          COALESCE(cdc.leads_count, 0)::int as leads_count,
+          COALESCE(cdc.deals_count, 0)::int as deals_count,
+          COALESCE(csc.suppressions_count, 0)::int as suppressions_count
+        FROM campaigns c
+        INNER JOIN mailings m ON m.campaign_id = c.id
+        LEFT JOIN properties p ON m.property_id = p.id
+        LEFT JOIN (
+          SELECT 
+            m1.campaign_id,
+            COUNT(DISTINCT CASE WHEN d.is_lead = true THEN d.id END)::int as leads_count,
+            COUNT(DISTINCT CASE WHEN d.is_conversion = true THEN d.id END)::int as deals_count
+          FROM mailings m1
+          INNER JOIN deals d ON (d.property_id = m1.property_id OR d.owner_id = m1.owner_id)
+          WHERE m1.campaign_id IS NOT NULL
+          GROUP BY m1.campaign_id
+        ) cdc ON cdc.campaign_id = c.id
+        LEFT JOIN (
+          SELECT 
+            m2.campaign_id,
+            COUNT(DISTINCT ms.id)::int as suppressions_count
+          FROM mailings m2
+          INNER JOIN mailing_suppression ms ON (ms.property_id = m2.property_id OR ms.owner_id = m2.owner_id)
+          WHERE m2.campaign_id IS NOT NULL
+          GROUP BY m2.campaign_id
+        ) csc ON csc.campaign_id = c.id
+        LEFT JOIN (
+          SELECT 
+            m3.campaign_id,
+            (ARRAY_AGG(sm.source_link) FILTER (WHERE sm.source_link IS NOT NULL AND sm.source_link != ''))[1] as sample_source_link
+          FROM mailings m3
+          LEFT JOIN source_metadata sm ON sm.property_id = m3.property_id
+          WHERE m3.campaign_id IS NOT NULL
+          GROUP BY m3.campaign_id
+        ) cs ON cs.campaign_id = c.id
+        GROUP BY c.id, c.name, c.link, cs.sample_source_link, cdc.leads_count, cdc.deals_count, csc.suppressions_count
+      )
+      SELECT *, COUNT(*) OVER() as full_count
+      FROM aggregated_campaigns
+      WHERE ${whereSql}
+      ORDER BY ${orderCol} ${orderDir} NULLS LAST, id DESC
+      LIMIT ${limit} OFFSET ${offset};
+    `;
+
+    const result = await pool.query(aggregatedSql, filterParams);
+    const rows = result.rows as any[];
+    const total = rows.length > 0 ? parseInt(rows[0].full_count, 10) || 0 : 0;
+
+    const formattedData = rows.map((r) => ({
+      id: r.id,
+      campaignId: r.campaign_id,
+      name: r.name,
+      campaignName: r.campaign_name,
+      googleSheetLink: r.google_sheet_link || null,
+      mailDate: r.mail_date || null,
+      latestMailDate: r.latest_mail_date || null,
+      totalMailings: Number(r.total_mailings) || 0,
+      totalOwners: Number(r.total_owners) || 0,
+      totalProperties: Number(r.total_properties) || 0,
+      totalOfferAmount: Number(r.total_offer_amount) || 0,
+      states: Array.isArray(r.states) ? r.states : [],
+      counties: Array.isArray(r.counties) ? r.counties : [],
+      leadsCount: Number(r.leads_count) || 0,
+      dealsCount: Number(r.deals_count) || 0,
+      suppressionsCount: Number(r.suppressions_count) || 0,
     }));
+
+    res.json(
+      successResponse(formattedData, {
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      })
+    );
   } catch (error) {
-    console.error('Error fetching mailings:', error);
+    console.error('Error fetching aggregated mailings:', error);
     res.status(500).json(errorResponse('Failed to fetch mailings'));
   }
 });

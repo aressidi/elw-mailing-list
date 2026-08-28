@@ -4,14 +4,22 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
 import {
-  useMailings,
+  useAggregatedMailings,
   useMailingStatsByState,
   useMailingStatsByCounty,
-  useCampaigns,
-  Mailing,
+  AggregatedMailing,
 } from '../hooks/use-api.ts';
 import { formatDate, formatCurrency, formatNumber } from '../lib/format.ts';
-import { Send, BarChart3, MapPin, Loader2 } from 'lucide-react';
+import {
+  Send,
+  BarChart3,
+  MapPin,
+  Loader2,
+  ExternalLink,
+  Users,
+  FileSpreadsheet,
+  Calendar,
+} from 'lucide-react';
 import {
   BarChart,
   Bar,
@@ -22,14 +30,15 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 
-type ViewMode = 'list' | 'by-state' | 'by-county';
+type ViewMode = 'campaigns' | 'by-state' | 'by-county';
 
 export function Mailings() {
   const [page, setPage] = useState(1);
-  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [viewMode, setViewMode] = useState<ViewMode>('campaigns');
   const [selectedState, setSelectedState] = useState('');
 
-  const { data: mailingsData, isLoading: mailingsLoading } = useMailings({
+  // We load a generous limit so client-side table sorting & column filtering is fast & comprehensive
+  const { data: mailingsData, isLoading: mailingsLoading } = useAggregatedMailings({
     page,
     limit: 100,
   });
@@ -38,124 +47,207 @@ export function Mailings() {
   const { data: countyStatsData, isLoading: countyStatsLoading } = useMailingStatsByCounty(
     selectedState || undefined
   );
-  const { data: campaignsData } = useCampaigns({ limit: 100 });
 
-  const mailings = mailingsData?.data || [];
+  const mailings: AggregatedMailing[] = mailingsData?.data || [];
   const stateStats = stateStatsData?.data || [];
   const countyStats = countyStatsData?.data || [];
-  const campaigns = campaignsData?.data || [];
+  const pagination = mailingsData?.pagination;
 
-  const campaignOptions = campaigns.map((c) => ({
-    label: c.name,
-    value: c.name,
-  }));
-
-  const columns: ColumnDef<Mailing>[] = [
+  const columns: ColumnDef<AggregatedMailing>[] = [
     {
-      id: 'id',
-      header: 'ID',
-      accessorKey: 'id',
-      filterType: 'number',
-      headerClassName: 'w-16',
-    },
-    {
-      id: 'owner',
-      header: 'Owner',
-      accessorFn: (row) => row.owner?.ownerName || '',
+      id: 'campaignName',
+      header: 'Campaign / Mailer',
+      accessorKey: 'name',
       filterType: 'text',
-      cell: (row) =>
-        row.owner ? (
-          <Link href={`/owners/${row.owner.id}`}>
-            <span className="font-medium text-blue-600 hover:underline">
-              {row.owner.ownerName}
-            </span>
+      cell: (row) => (
+        <div className="space-y-1">
+          <Link href={`/campaigns/${row.campaignId}`}>
+            <span className="font-semibold text-blue-600 hover:underline">{row.name}</span>
           </Link>
-        ) : (
-          '-'
-        ),
-    },
-    {
-      id: 'property',
-      header: 'Property (APN)',
-      accessorFn: (row) => row.property?.apn || '',
-      filterType: 'text',
-      cell: (row) =>
-        row.property ? (
-          <Link href={`/properties/${row.property.id}`}>
-            <span className="font-medium text-blue-600 hover:underline">
-              {row.property.apn}
-            </span>
-          </Link>
-        ) : (
-          '-'
-        ),
-    },
-    {
-      id: 'state',
-      header: 'State',
-      accessorFn: (row) => row.mailingAddress?.state || row.property?.state || '',
-      filterType: 'text',
-      cell: (row) => {
-        const state = row.mailingAddress?.state || row.property?.state;
-        return state ? <Badge variant="secondary">{state}</Badge> : '-';
-      },
-    },
-    {
-      id: 'campaign',
-      header: 'Campaign',
-      accessorFn: (row) => row.campaign?.name || '',
-      filterType: 'select',
-      filterOptions: campaignOptions,
-      cell: (row) =>
-        row.campaign ? (
-          <Link href={`/campaigns/${row.campaign.id}`}>
-            <span className="text-blue-600 hover:underline">
-              {row.campaign.name}
-            </span>
-          </Link>
-        ) : (
-          '-'
-        ),
+          <div className="flex items-center gap-2 text-xs text-gray-500">
+            <span>ID #{row.campaignId}</span>
+            <span>•</span>
+            <span>{formatNumber(row.totalMailings)} total records</span>
+          </div>
+        </div>
+      ),
     },
     {
       id: 'mailDate',
       header: 'Mail Date',
       accessorKey: 'mailDate',
       filterType: 'date',
-      cell: (row) => formatDate(row.mailDate),
+      cell: (row) => (
+        <div>
+          <div className="flex items-center gap-1.5 text-sm text-gray-900 font-medium">
+            <Calendar className="w-3.5 h-3.5 text-gray-400" />
+            {formatDate(row.mailDate)}
+          </div>
+          {row.latestMailDate && row.latestMailDate !== row.mailDate && (
+            <div className="text-xs text-gray-500 mt-0.5">thru {formatDate(row.latestMailDate)}</div>
+          )}
+        </div>
+      ),
     },
     {
-      id: 'offerPrice',
-      header: 'Offer Price',
-      accessorKey: 'offerPrice',
+      id: 'totalOwners',
+      header: 'Owners Mailed',
+      accessorKey: 'totalOwners',
       filterType: 'number',
       align: 'right',
-      cell: (row) => (row.offerPrice ? formatCurrency(Number(row.offerPrice)) : '-'),
-      comparator: (a, b) => (Number(a.offerPrice) || 0) - (Number(b.offerPrice) || 0),
+      cell: (row) => (
+        <div>
+          <div className="inline-flex items-center gap-1 text-sm font-semibold text-gray-900">
+            <Users className="w-3.5 h-3.5 text-gray-400" />
+            {formatNumber(row.totalOwners)}
+          </div>
+          <div className="text-xs text-gray-500">{formatNumber(row.totalProperties)} props</div>
+        </div>
+      ),
+    },
+    {
+      id: 'states',
+      header: 'States & Counties',
+      accessorFn: (row) => row.states.join(', '),
+      filterType: 'text',
+      cell: (row) => {
+        const topCounties = row.counties.slice(0, 3);
+        const remainingCounties = row.counties.length - 3;
+        return (
+          <div className="space-y-1.5 max-w-xs">
+            <div className="flex flex-wrap gap-1">
+              {row.states.length > 0 ? (
+                row.states.map((st) => (
+                  <Badge key={st} variant="secondary" className="font-mono text-xs font-semibold">
+                    {st}
+                  </Badge>
+                ))
+              ) : (
+                <span className="text-xs text-gray-400">-</span>
+              )}
+            </div>
+            <div className="text-xs text-gray-600 truncate" title={row.counties.join(', ')}>
+              {topCounties.length > 0 ? (
+                <>
+                  <span>{topCounties.join(', ')}</span>
+                  {remainingCounties > 0 && (
+                    <span className="text-gray-400 font-medium ml-1">+{remainingCounties} more</span>
+                  )}
+                </>
+              ) : (
+                <span className="text-gray-400">-</span>
+              )}
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      id: 'leadsCount',
+      header: 'Leads',
+      accessorKey: 'leadsCount',
+      filterType: 'number',
+      align: 'center',
+      cell: (row) =>
+        row.leadsCount > 0 ? (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-green-100 text-green-800">
+            {row.leadsCount}
+          </span>
+        ) : (
+          <span className="text-xs text-gray-400">0</span>
+        ),
+    },
+    {
+      id: 'dealsCount',
+      header: 'Deals',
+      accessorKey: 'dealsCount',
+      filterType: 'number',
+      align: 'center',
+      cell: (row) =>
+        row.dealsCount > 0 ? (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
+            {row.dealsCount}
+          </span>
+        ) : (
+          <span className="text-xs text-gray-400">0</span>
+        ),
+    },
+    {
+      id: 'suppressionsCount',
+      header: 'Suppressions',
+      accessorKey: 'suppressionsCount',
+      filterType: 'number',
+      align: 'center',
+      cell: (row) =>
+        row.suppressionsCount > 0 ? (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
+            {row.suppressionsCount}
+          </span>
+        ) : (
+          <span className="text-xs text-gray-400">0</span>
+        ),
+    },
+    {
+      id: 'totalOfferAmount',
+      header: 'Total Offers',
+      accessorKey: 'totalOfferAmount',
+      filterType: 'number',
+      align: 'right',
+      cell: (row) => (row.totalOfferAmount > 0 ? formatCurrency(row.totalOfferAmount) : '-'),
+    },
+    {
+      id: 'googleSheetLink',
+      header: 'Sheet Link',
+      accessorKey: 'googleSheetLink',
+      enableFiltering: false,
+      align: 'center',
+      cell: (row) =>
+        row.googleSheetLink ? (
+          <a
+            href={row.googleSheetLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md transition-colors"
+            title={row.googleSheetLink}
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Sheet</span>
+            <ExternalLink className="w-3 h-3 text-emerald-500" />
+          </a>
+        ) : (
+          <span className="text-xs text-gray-400">-</span>
+        ),
     },
   ];
 
   return (
     <div className="space-y-6">
+      {/* Page Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Mailings</h2>
-          <p className="text-gray-600 mt-1">Manage, sort, filter, and analyze all mail records</p>
+          <p className="text-gray-600 mt-1">
+            Aggregated campaign overview: owners mailed, response metrics, and geographic coverage
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex bg-gray-100 rounded-lg p-1">
             <button
-              onClick={() => setViewMode('list')}
+              onClick={() => setViewMode('campaigns')}
               className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                viewMode === 'list' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                viewMode === 'campaigns'
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
               }`}
             >
-              List
+              Campaigns / Mailers
             </button>
             <button
               onClick={() => setViewMode('by-state')}
               className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                viewMode === 'by-state' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                viewMode === 'by-state'
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
               }`}
             >
               By State
@@ -163,7 +255,9 @@ export function Mailings() {
             <button
               onClick={() => setViewMode('by-county')}
               className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                viewMode === 'by-county' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                viewMode === 'by-county'
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
               }`}
             >
               By County
@@ -172,14 +266,19 @@ export function Mailings() {
         </div>
       </div>
 
-      {/* List View */}
-      {viewMode === 'list' && (
+      {/* Campaigns / Distinct Mailers Aggregated View */}
+      {viewMode === 'campaigns' && (
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between pb-4">
             <CardTitle className="flex items-center gap-2">
               <Send className="w-5 h-5 text-blue-600" />
-              All Mailings
+              Distinct Mailers & Campaigns
             </CardTitle>
+            {pagination && (
+              <div className="text-xs text-gray-500 font-medium">
+                {formatNumber(pagination.total)} total campaigns
+              </div>
+            )}
           </CardHeader>
           <CardContent className="p-4">
             {mailingsLoading ? (
@@ -192,7 +291,7 @@ export function Mailings() {
                 columns={columns}
                 storageKey="mailings_view"
                 emptyIcon={<Send className="w-12 h-12" />}
-                emptyText="No mailings found"
+                emptyText="No campaigns found"
                 emptySubtext="Try adjusting your column filters or sorting"
               />
             )}
@@ -229,7 +328,11 @@ export function Mailings() {
                       <YAxis tick={{ fontSize: 12 }} />
                       <Tooltip
                         formatter={(value: number) => [formatNumber(value), 'Mailings']}
-                        contentStyle={{ borderRadius: 8, border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                        contentStyle={{
+                          borderRadius: 8,
+                          border: 'none',
+                          boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+                        }}
                       />
                       <Bar dataKey="count" fill="#3b82f6" radius={[4, 4, 0, 0]} />
                     </BarChart>
