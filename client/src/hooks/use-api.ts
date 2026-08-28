@@ -109,6 +109,26 @@ export function useCampaign(id: number | string) {
   });
 }
 
+export function useCampaignsWithStats(params?: {
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: string;
+}) {
+  const query = new URLSearchParams();
+  query.set('include', 'stats');
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
+  if (params?.sortBy) query.set('sortBy', params.sortBy);
+  if (params?.sortOrder) query.set('sortOrder', params.sortOrder);
+
+  return useQuery({
+    queryKey: ['campaigns', 'stats', params],
+    queryFn: () =>
+      fetchJson<PaginatedResponse<CampaignWithStats[]>>(`${API_BASE}/campaigns?${query.toString()}`),
+  });
+}
+
 // ─── Mailings ────────────────────────────────────────────────
 export function useMailings(params?: {
   page?: number;
@@ -296,6 +316,21 @@ export interface Campaign {
   createdAt: string;
 }
 
+export interface CampaignWithStats extends Campaign {
+  googleSheetLink: string | null;
+  firstMailDate: string | null;
+  lastMailDate: string | null;
+  totalMailings: number;
+  totalOwners: number;
+  totalProperties: number;
+  totalOfferAmount: number;
+  states: string[];
+  counties: string[];
+  leadsCount: number;
+  dealsCount: number;
+  suppressionsCount: number;
+}
+
 export interface AggregatedMailing {
   id: number;
   campaignId: number;
@@ -381,6 +416,16 @@ export interface CampaignDetail extends Campaign {
   stats: {
     mailingsCount: number;
     totalOfferPrice: number;
+    totalOwners: number;
+    totalProperties: number;
+    states: string[];
+    counties: string[];
+    leadsCount: number;
+    dealsCount: number;
+    suppressionsCount: number;
+    firstMailDate: string | null;
+    lastMailDate: string | null;
+    googleSheetLink: string | null;
   };
 }
 

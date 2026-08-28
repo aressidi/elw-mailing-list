@@ -526,11 +526,166 @@ router.post('/owners/bulk', async (req, res) => {
 // Campaigns Routes
 // ============================================================
 
-// GET /api/campaigns - List all campaigns
+// Shared CTE aggregating per-campaign stats (mailings, owners, properties,
+// states/counties, leads, deals, suppressions, offer totals, mail date range).
+// Uses LEFT JOIN mailings so campaigns with zero mailings still render (0-state, no crash).
+function campaignStatsCte(): string {
+  return `
+    WITH campaign_stats AS (
+      SELECT
+        c.id AS id,
+        c.name AS name,
+        c.link AS link,
+        c.created_at AS created_at,
+        COALESCE(NULLIF(c.link, ''), cs.sample_source_link) AS google_sheet_link,
+        MIN(m.mail_date) AS first_mail_date,
+        MAX(m.mail_date) AS last_mail_date,
+        COUNT(m.id)::int AS total_mailings,
+        COUNT(DISTINCT m.owner_id)::int AS total_owners,
+        COUNT(DISTINCT m.property_id)::int AS total_properties,
+        COALESCE(SUM(CAST(m.offer_price AS NUMERIC)), 0)::numeric(14,2) AS total_offer_amount,
+        COALESCE(ARRAY_AGG(DISTINCT p.state) FILTER (WHERE p.state IS NOT NULL), ARRAY[]::varchar[]) AS states,
+        COALESCE(ARRAY_AGG(DISTINCT p.county) FILTER (WHERE p.county IS NOT NULL), ARRAY[]::varchar[]) AS counties,
+        COALESCE(cdc.leads_count, 0)::int AS leads_count,
+        COALESCE(cdc.deals_count, 0)::int AS deals_count,
+        COALESCE(csc.suppressions_count, 0)::int AS suppressions_count
+      FROM campaigns c
+      LEFT JOIN mailings m ON m.campaign_id = c.id
+      LEFT JOIN properties p ON m.property_id = p.id
+      LEFT JOIN (
+        SELECT
+          m1.campaign_id,
+          COUNT(DISTINCT CASE WHEN d.is_lead = true THEN d.id END)::int AS leads_count,
+          COUNT(DISTINCT CASE WHEN d.is_conversion = true THEN d.id END)::int AS deals_count
+        FROM mailings m1
+        INNER JOIN deals d ON (d.property_id = m1.property_id OR d.owner_id = m1.owner_id)
+        WHERE m1.campaign_id IS NOT NULL
+        GROUP BY m1.campaign_id
+      ) cdc ON cdc.campaign_id = c.id
+      LEFT JOIN (
+        SELECT
+          m2.campaign_id,
+          COUNT(DISTINCT ms.id)::int AS suppressions_count
+        FROM mailings m2
+        INNER JOIN mailing_suppression ms ON (ms.property_id = m2.property_id OR ms.owner_id = m2.owner_id)
+        WHERE m2.campaign_id IS NOT NULL
+        GROUP BY m2.campaign_id
+      ) csc ON csc.campaign_id = c.id
+      LEFT JOIN (
+        SELECT
+          m3.campaign_id,
+          (ARRAY_AGG(sm.source_link) FILTER (WHERE sm.source_link IS NOT NULL AND sm.source_link != ''))[1] AS sample_source_link
+        FROM mailings m3
+        LEFT JOIN source_metadata sm ON sm.property_id = m3.property_id
+        WHERE m3.campaign_id IS NOT NULL
+        GROUP BY m3.campaign_id
+      ) cs ON cs.campaign_id = c.id
+      GROUP BY c.id, c.name, c.link, c.created_at, cs.sample_source_link, cdc.leads_count, cdc.deals_count, csc.suppressions_count
+    )
+  `;
+}
+
+function formatCampaignStatsRow(r: any) {
+  return {
+    id: r.id,
+    name: r.name,
+    link: r.link,
+    createdAt: r.created_at,
+    googleSheetLink: r.google_sheet_link || null,
+    firstMailDate: r.first_mail_date || null,
+    lastMailDate: r.last_mail_date || null,
+    totalMailings: Number(r.total_mailings) || 0,
+    totalOwners: Number(r.total_owners) || 0,
+    totalProperties: Number(r.total_properties) || 0,
+    totalOfferAmount: Number(r.total_offer_amount) || 0,
+    states: Array.isArray(r.states) ? r.states : [],
+    counties: Array.isArray(r.counties) ? r.counties : [],
+    leadsCount: Number(r.leads_count) || 0,
+    dealsCount: Number(r.deals_count) || 0,
+    suppressionsCount: Number(r.suppressions_count) || 0,
+  };
+}
+
+// GET /api/campaigns - List all campaigns. Pass ?include=stats to get per-campaign
+// aggregated stats (mailings/owners/properties/states/counties/leads/deals/suppressions/offers).
 router.get('/campaigns', async (req, res) => {
   try {
     const { limit, offset, page } = getPagination(req);
-    const { sortBy = 'id', sortOrder = 'desc' } = req.query;
+    const { sortBy = 'id', sortOrder = 'desc', include } = req.query;
+
+    if (include === 'stats') {
+      const orderDir = String(sortOrder).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+      let orderCol = 'id';
+      switch (sortBy) {
+        case 'name':
+          orderCol = 'name';
+          break;
+        case 'createdAt':
+          orderCol = 'created_at';
+          break;
+        case 'totalMailings':
+        case 'mailings':
+          orderCol = 'total_mailings';
+          break;
+        case 'totalOwners':
+        case 'owners':
+          orderCol = 'total_owners';
+          break;
+        case 'totalProperties':
+        case 'properties':
+          orderCol = 'total_properties';
+          break;
+        case 'totalOfferAmount':
+        case 'offerPrice':
+          orderCol = 'total_offer_amount';
+          break;
+        case 'leadsCount':
+        case 'leads':
+          orderCol = 'leads_count';
+          break;
+        case 'dealsCount':
+        case 'deals':
+          orderCol = 'deals_count';
+          break;
+        case 'suppressionsCount':
+        case 'suppressions':
+          orderCol = 'suppressions_count';
+          break;
+        case 'firstMailDate':
+        case 'mailDate':
+          orderCol = 'first_mail_date';
+          break;
+        case 'lastMailDate':
+          orderCol = 'last_mail_date';
+          break;
+        case 'id':
+        default:
+          orderCol = 'id';
+          break;
+      }
+
+      const sql = `
+        ${campaignStatsCte()}
+        SELECT *, COUNT(*) OVER() as full_count
+        FROM campaign_stats
+        ORDER BY ${orderCol} ${orderDir} NULLS LAST, id DESC
+        LIMIT ${limit} OFFSET ${offset};
+      `;
+
+      const result = await pool.query(sql);
+      const rows = result.rows as any[];
+      const total = rows.length > 0 ? parseInt(rows[0].full_count, 10) || 0 : 0;
+      const formattedData = rows.map(formatCampaignStatsRow);
+
+      return res.json(successResponse(formattedData, {
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      }));
+    }
 
     // Get total count
     const totalResult = await db.select({ count: count() }).from(campaigns);
@@ -557,7 +712,7 @@ router.get('/campaigns', async (req, res) => {
   }
 });
 
-// GET /api/campaigns/:id - Get campaign with mailings count
+// GET /api/campaigns/:id - Get campaign with mailings + aggregated stats
 router.get('/campaigns/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -582,15 +737,27 @@ router.get('/campaigns/:id', async (req, res) => {
       return res.status(404).json(errorResponse('Campaign not found', 404));
     }
 
-    // Calculate stats
-    const mailingsCount = campaign.mailings?.length || 0;
-    const totalOfferPrice = campaign.mailings?.reduce((sum, m) => sum + (Number(m.offerPrice) || 0), 0) || 0;
+    const statsResult = await pool.query(
+      `${campaignStatsCte()} SELECT * FROM campaign_stats WHERE id = $1`,
+      [id]
+    );
+    const s = statsResult.rows[0];
 
     res.json(successResponse({
       ...campaign,
       stats: {
-        mailingsCount,
-        totalOfferPrice,
+        mailingsCount: Number(s?.total_mailings) || 0,
+        totalOfferPrice: Number(s?.total_offer_amount) || 0,
+        totalOwners: Number(s?.total_owners) || 0,
+        totalProperties: Number(s?.total_properties) || 0,
+        states: Array.isArray(s?.states) ? s.states : [],
+        counties: Array.isArray(s?.counties) ? s.counties : [],
+        leadsCount: Number(s?.leads_count) || 0,
+        dealsCount: Number(s?.deals_count) || 0,
+        suppressionsCount: Number(s?.suppressions_count) || 0,
+        firstMailDate: s?.first_mail_date || null,
+        lastMailDate: s?.last_mail_date || null,
+        googleSheetLink: s?.google_sheet_link || null,
       },
     }));
   } catch (error) {

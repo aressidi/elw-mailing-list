@@ -4,7 +4,20 @@ import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
 import { useCampaign, Mailing } from '../hooks/use-api.ts';
 import { formatDate, formatCurrency, formatNumber } from '../lib/format.ts';
-import { ArrowLeft, Megaphone, Send, ExternalLink, Loader2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  Megaphone,
+  Send,
+  ExternalLink,
+  Loader2,
+  Users,
+  Building,
+  MapPin,
+  TrendingUp,
+  DollarSign,
+  Ban,
+  Calendar,
+} from 'lucide-react';
 
 export function CampaignDetail() {
   const params = useParams<{ id: string }>();
@@ -145,28 +158,140 @@ export function CampaignDetail() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
-          <CardContent className="p-4">
-            <p className="text-sm text-gray-600">Total Mailings</p>
-            <p className="text-2xl font-bold text-gray-900">{formatNumber(stats?.mailingsCount || 0)}</p>
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="p-2 rounded-lg bg-purple-50">
+              <Send className="w-5 h-5 text-purple-600" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs text-gray-600 truncate">Mailings Mailed</p>
+              <p className="text-xl font-bold text-gray-900">{formatNumber(stats?.mailingsCount || 0)}</p>
+            </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
-            <p className="text-sm text-gray-600">Total Offer Value</p>
-            <p className="text-2xl font-bold text-gray-900">
-              {formatCurrency(stats?.totalOfferPrice || 0)}
-            </p>
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="p-2 rounded-lg bg-green-50">
+              <Users className="w-5 h-5 text-green-600" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs text-gray-600 truncate">Owners</p>
+              <p className="text-xl font-bold text-gray-900">{formatNumber(stats?.totalOwners || 0)}</p>
+            </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
-            <p className="text-sm text-gray-600">Created</p>
-            <p className="text-2xl font-bold text-gray-900">{formatDate(campaign.createdAt)}</p>
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="p-2 rounded-lg bg-blue-50">
+              <Building className="w-5 h-5 text-blue-600" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs text-gray-600 truncate">Properties</p>
+              <p className="text-xl font-bold text-gray-900">{formatNumber(stats?.totalProperties || 0)}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="p-2 rounded-lg bg-emerald-50">
+              <DollarSign className="w-5 h-5 text-emerald-600" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs text-gray-600 truncate">Total Offer Value</p>
+              <p className="text-xl font-bold text-gray-900">{formatCurrency(stats?.totalOfferPrice || 0)}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="p-2 rounded-lg bg-orange-50">
+              <TrendingUp className="w-5 h-5 text-orange-600" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs text-gray-600 truncate">Leads</p>
+              <p className="text-xl font-bold text-gray-900">{formatNumber(stats?.leadsCount || 0)}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="p-2 rounded-lg bg-indigo-50">
+              <TrendingUp className="w-5 h-5 text-indigo-600" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs text-gray-600 truncate">Deals</p>
+              <p className="text-xl font-bold text-gray-900">{formatNumber(stats?.dealsCount || 0)}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="p-2 rounded-lg bg-red-50">
+              <Ban className="w-5 h-5 text-red-600" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs text-gray-600 truncate">Suppressions</p>
+              <p className="text-xl font-bold text-gray-900">{formatNumber(stats?.suppressionsCount || 0)}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="p-2 rounded-lg bg-cyan-50">
+              <Calendar className="w-5 h-5 text-cyan-600" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs text-gray-600 truncate">Created</p>
+              <p className="text-xl font-bold text-gray-900">{formatDate(campaign.createdAt)}</p>
+            </div>
           </CardContent>
         </Card>
       </div>
+
+      {/* States, Counties & Mail Date Range */}
+      <Card>
+        <CardContent className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <p className="text-sm text-gray-600 flex items-center gap-1.5 mb-2">
+              <MapPin className="w-4 h-4 text-gray-400" />
+              States
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {stats?.states && stats.states.length > 0 ? (
+                stats.states.map((st) => (
+                  <Badge key={st} variant="secondary" className="font-mono text-xs font-semibold">
+                    {st}
+                  </Badge>
+                ))
+              ) : (
+                <span className="text-sm text-gray-400">-</span>
+              )}
+            </div>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600 flex items-center gap-1.5 mb-2">
+              <MapPin className="w-4 h-4 text-gray-400" />
+              Counties
+            </p>
+            <p className="text-sm text-gray-800">
+              {stats?.counties && stats.counties.length > 0 ? stats.counties.join(', ') : '-'}
+            </p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600 flex items-center gap-1.5 mb-2">
+              <Calendar className="w-4 h-4 text-gray-400" />
+              Mail Date Range
+            </p>
+            <p className="text-sm text-gray-800">
+              {stats?.firstMailDate ? formatDate(stats.firstMailDate) : '-'}
+              {stats?.lastMailDate && stats.lastMailDate !== stats.firstMailDate && (
+                <> &ndash; {formatDate(stats.lastMailDate)}</>
+              )}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Mailing List */}
       <Card>

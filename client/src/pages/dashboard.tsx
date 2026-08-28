@@ -1,6 +1,15 @@
+import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
-import { useDashboardStats, useMailingStatsByState, useMailVolumeByMonth } from '../hooks/use-api.ts';
+import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
+import {
+  useDashboardStats,
+  useMailingStatsByState,
+  useMailingStatsByCounty,
+  useMailVolumeByMonth,
+  MailingStateStat,
+  CountyStat,
+} from '../hooks/use-api.ts';
 import {
   Building,
   Users,
@@ -10,6 +19,7 @@ import {
   Ban,
   Megaphone,
   Loader2,
+  MapPin,
 } from 'lucide-react';
 import {
   BarChart,
@@ -30,13 +40,78 @@ import { formatNumber, formatCurrency, formatPercent } from '../lib/format.ts';
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316'];
 
 export function Dashboard() {
+  const [coverageState, setCoverageState] = useState('');
+
   const { data: statsData, isLoading: statsLoading } = useDashboardStats();
   const { data: stateStatsData, isLoading: stateLoading } = useMailingStatsByState();
+  const { data: countyStatsData, isLoading: countyLoading } = useMailingStatsByCounty(
+    coverageState || undefined
+  );
   const { data: mailVolumeData, isLoading: mailVolumeLoading } = useMailVolumeByMonth();
 
   const stats = statsData?.data;
   const stateStats = stateStatsData?.data || [];
+  const countyStats = countyStatsData?.data || [];
   const mailVolume = mailVolumeData?.data || [];
+
+  const stateColumns: ColumnDef<MailingStateStat>[] = [
+    {
+      id: 'state',
+      header: 'State',
+      accessorKey: 'state',
+      filterType: 'text',
+      cell: (row) => <Badge variant="secondary">{row.state}</Badge>,
+    },
+    {
+      id: 'count',
+      header: 'Count',
+      accessorKey: 'count',
+      filterType: 'number',
+      align: 'right',
+      cell: (row) => formatNumber(row.count),
+    },
+    {
+      id: 'offers',
+      header: 'Total Offers',
+      accessorKey: 'offers',
+      filterType: 'number',
+      align: 'right',
+      cell: (row) => formatCurrency(row.offers),
+    },
+  ];
+
+  const countyColumns: ColumnDef<CountyStat>[] = [
+    {
+      id: 'state',
+      header: 'State',
+      accessorKey: 'state',
+      filterType: 'text',
+      cell: (row) => <Badge variant="secondary">{row.state}</Badge>,
+    },
+    {
+      id: 'county',
+      header: 'County',
+      accessorKey: 'county',
+      filterType: 'text',
+      cell: (row) => row.county,
+    },
+    {
+      id: 'count',
+      header: 'Count',
+      accessorKey: 'count',
+      filterType: 'number',
+      align: 'right',
+      cell: (row) => formatNumber(row.count),
+    },
+    {
+      id: 'offers',
+      header: 'Total Offers',
+      accessorKey: 'offers',
+      filterType: 'number',
+      align: 'right',
+      cell: (row) => formatCurrency(row.offers),
+    },
+  ];
 
   const overviewCards = stats?.overview
     ? [
@@ -223,6 +298,82 @@ export function Dashboard() {
                 )}
               </CardContent>
             </Card>
+          </div>
+
+          {/* Mailing Coverage: By State / By County */}
+          <div>
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Mailing Coverage</h3>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <MapPin className="w-5 h-5 text-gray-500" />
+                    By State
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-4">
+                  {stateLoading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                    </div>
+                  ) : stateStats.length === 0 ? (
+                    <div className="text-center py-12 text-gray-500">
+                      <MapPin className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+                      <p>No data available</p>
+                    </div>
+                  ) : (
+                    <DataTable
+                      data={stateStats}
+                      columns={stateColumns}
+                      storageKey="dashboard_coverage_by_state"
+                      emptyIcon={<MapPin className="w-12 h-12" />}
+                      emptyText="No state data found"
+                    />
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <MapPin className="w-5 h-5 text-gray-500" />
+                    By County
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-4">
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Filter by State</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. MI"
+                      value={coverageState}
+                      onChange={(e) => setCoverageState(e.target.value)}
+                      className="input-field max-w-xs"
+                    />
+                  </div>
+
+                  {countyLoading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                    </div>
+                  ) : countyStats.length === 0 ? (
+                    <div className="text-center py-12 text-gray-500">
+                      <MapPin className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+                      <p>No data available</p>
+                      {coverageState && <p className="text-sm mt-1">Try removing the state filter</p>}
+                    </div>
+                  ) : (
+                    <DataTable
+                      data={countyStats}
+                      columns={countyColumns}
+                      storageKey="dashboard_coverage_by_county"
+                      emptyIcon={<MapPin className="w-12 h-12" />}
+                      emptyText="No county data found"
+                    />
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </div>
 
           {/* Recent Activity */}
