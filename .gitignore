@@ -36,3 +36,6 @@ npm-debug.log*
 tmp/
 temp/
 *.tmp
+
+# Generated migration script reports
+scripts/reports/

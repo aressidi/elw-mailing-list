@@ -11,6 +11,7 @@ const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://localhost:5432/el
 
 // Sheet ID
 const SHEET_ID = '1SrqwoqPlxmceae5y7DylTvUkVOXjyb58dsjDY3KQ7zA';
+const UNASSIGNED_CAMPAIGN_NAME = 'Unassigned / No Sheet';
 
 interface SheetRow {
   uniqueId?: string;
@@ -197,16 +198,31 @@ async function main() {
   }).returning();
   const dataSourceId = dataSourceResult[0].id;
   
-  // Create default campaign
-  const campaignResult = await db.insert(campaigns).values({
-    name: 'Master List 2026 Default Campaign',
-    link: ''
-  }).onConflictDoNothing().returning();
-  const defaultCampaignId = campaignResult[0]?.id;
-  
-  // Track unique sheet names for campaigns
-  const sheetNames = new Set<string>();
-  
+  // Load existing campaigns (find-or-create by exact name; campaigns.name has no unique
+  // constraint, so dedup is done in-memory the same way owner names are deduped below).
+  console.log('Loading existing campaigns...');
+  const campaignNameToId = new Map<string, number>();
+  const existingCampaigns = await db.select({ id: campaigns.id, name: campaigns.name }).from(campaigns);
+  for (const c of existingCampaigns) {
+    if (!campaignNameToId.has(c.name)) campaignNameToId.set(c.name, c.id);
+  }
+  console.log(`Found ${existingCampaigns.length} existing campaigns`);
+
+  async function resolveCampaignId(sheetName: string, sheetLink: string): Promise<number> {
+    const name = sheetName?.trim() || UNASSIGNED_CAMPAIGN_NAME;
+    if (campaignNameToId.has(name)) {
+      return campaignNameToId.get(name)!;
+    }
+    const result = await db.insert(campaigns).values({
+      name,
+      link: sheetLink?.trim() || null,
+    }).returning();
+    const id = result[0].id;
+    campaignNameToId.set(name, id);
+    stats.campaigns++;
+    return id;
+  }
+
   for (let batch = 0; batch < numBatches; batch++) {
     const startRow = batch * batchSize + 2; // +2 because row 1 is header (1-indexed)
     const endRow = Math.min(startRow + batchSize - 1, totalRows);
@@ -225,9 +241,6 @@ async function main() {
       
       const rows = parseSheetData(data.values);
       console.log(`  Retrieved ${rows.length} rows`);
-      
-      // Collect sheet names
-      rows.forEach(r => { if (r.sheetName) sheetNames.add(r.sheetName); });
       
       // Process each row
       for (const row of rows) {
@@ -342,11 +355,12 @@ async function main() {
             // ========== MAILING ==========
             const mailDate = parseDate(row.mailingDate1);
             if (mailDate || row.offerPrice) {
+              const campaignId = await resolveCampaignId(row.sheetName, row.sheetLink);
               const mailingValues: any = {
                 propertyId: propertyId,
                 ownerId: ownerId,
                 mailingAddressId: mailingAddressId,
-                campaignId: defaultCampaignId,
+                campaignId: campaignId,
                 mailDate: mailDate,
                 offerPrice: parseOfferPrice(row.offerPrice),
               };
@@ -410,17 +424,6 @@ async function main() {
     } catch (batchError: any) {
       console.error(`  Error in batch ${batch + 1}:`, batchError.message || batchError);
       stats.errors += batchSize;
-    }
-  }
-  
-  // Create campaigns for sheet names
-  console.log('\nCreating campaigns from sheet names...');
-  for (const sheetName of sheetNames) {
-    if (sheetName) {
-      await db.insert(campaigns).values({
-        name: sheetName,
-        link: ''
-      }).onConflictDoNothing();
     }
   }
   
