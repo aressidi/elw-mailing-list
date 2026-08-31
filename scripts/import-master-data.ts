@@ -6,12 +6,12 @@ import {
   dataSources, mailingSuppression, deals, sourceMetadata,
   ownerTypeEnum, hitTypeEnum, suppressionReasonEnum
 } from '../shared/schema';
+import { normalizeCampaignName, cleanSheetLink, UNASSIGNED_CAMPAIGN_NAME } from './campaign-normalize';
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://localhost:5432/elw_mailing_list';
 
 // Sheet ID
 const SHEET_ID = '1SrqwoqPlxmceae5y7DylTvUkVOXjyb58dsjDY3KQ7zA';
-const UNASSIGNED_CAMPAIGN_NAME = 'Unassigned / No Sheet';
 
 interface SheetRow {
   uniqueId?: string;
@@ -209,13 +209,14 @@ async function main() {
   console.log(`Found ${existingCampaigns.length} existing campaigns`);
 
   async function resolveCampaignId(sheetName: string, sheetLink: string): Promise<number> {
-    const name = sheetName?.trim() || UNASSIGNED_CAMPAIGN_NAME;
+    const name = normalizeCampaignName(sheetName);
+    const link = cleanSheetLink(sheetLink);
     if (campaignNameToId.has(name)) {
       return campaignNameToId.get(name)!;
     }
     const result = await db.insert(campaigns).values({
       name,
-      link: sheetLink?.trim() || null,
+      link,
     }).returning();
     const id = result[0].id;
     campaignNameToId.set(name, id);
