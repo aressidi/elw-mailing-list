@@ -7,6 +7,7 @@ import {
   ownerTypeEnum, hitTypeEnum, suppressionReasonEnum
 } from '../shared/schema';
 import { normalizeCampaignName, cleanSheetLink, UNASSIGNED_CAMPAIGN_NAME } from './campaign-normalize';
+import { isSeedOwner, deleteSeedOwnerLinksForProperty } from './seed-owner-utils';
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://localhost:5432/elw_mailing_list';
 
@@ -180,10 +181,15 @@ async function main() {
     deals: 0,
     errors: 0,
     skipped: 0,
+    seedOwnersReplaced: 0,
   };
-  
-  // Track unique keys to avoid duplicates within the import
-  const seenApns = new Set<string>();
+
+  // Track unique keys to avoid duplicates within the import. apnOwnerByApn
+  // records, per APN, which owner claimed it and whether that owner was a
+  // seed/test row — a later real-owner row for the same APN is allowed to
+  // supersede an earlier seed row (see the dedup check below), but never
+  // the reverse.
+  const apnOwnerByApn = new Map<string, { ownerId: number; isSeed: boolean }>();
   const seenOwners = new Map<string, number>(); // ownerName -> ownerId
   const seenAddresses = new Map<string, number>(); // composite key -> addressId
   
@@ -254,14 +260,31 @@ async function main() {
           
           // Normalize APN
           const apn = row.apn.trim().toUpperCase();
-          
-          // Skip if we've already seen this APN
-          if (seenApns.has(apn)) {
-            stats.skipped++;
-            continue;
+
+          // Resolve this row's owner name up front so the dedup check below
+          // can tell a real owner apart from a seed/test row.
+          let ownerName = row.ownerLastName || '';
+          if (row.ownerFirstName) {
+            ownerName = `${row.ownerFirstName} ${ownerName}`.trim();
           }
-          seenApns.add(apn);
-          
+
+          // If still empty, try to extract from the sheet or use placeholder
+          if (!ownerName) {
+            ownerName = `Unknown Owner - ${apn}`;
+          }
+          const rowIsSeed = isSeedOwner(ownerName);
+
+          // Skip if we've already seen this APN — unless a seed/test row
+          // claimed it earlier and this row is a real owner, in which case
+          // the real owner takes over below instead of being skipped.
+          const claimedBy = apnOwnerByApn.get(apn);
+          if (claimedBy) {
+            if (!(claimedBy.isSeed && !rowIsSeed)) {
+              stats.skipped++;
+              continue;
+            }
+          }
+
           // ========== PROPERTY ==========
           const propertyValues: any = {
             apn: apn,
@@ -272,7 +295,7 @@ async function main() {
             dataSourceId: dataSourceId,
             sourceAcquiredDate: parseDate(row.mailingDate1) || new Date('2026-01-01'),
           };
-          
+
           const propertyResult = await db.insert(properties).values(propertyValues)
             .onConflictDoUpdate({
               target: properties.apn,
@@ -284,21 +307,11 @@ async function main() {
             .returning();
           const propertyId = propertyResult[0].id;
           stats.properties++;
-          
+
           // ========== OWNER ==========
-          let ownerName = row.ownerLastName || '';
-          if (row.ownerFirstName) {
-            ownerName = `${row.ownerFirstName} ${ownerName}`.trim();
-          }
-          
-          // If still empty, try to extract from the sheet or use placeholder
-          if (!ownerName) {
-            ownerName = `Unknown Owner - ${apn}`;
-          }
-          
           const ownerType = getOwnerType(ownerName);
           const ownerKey = ownerName.toLowerCase().trim();
-          
+
           let ownerId: number;
           if (seenOwners.has(ownerKey)) {
             ownerId = seenOwners.get(ownerKey)!;
@@ -309,7 +322,7 @@ async function main() {
               ownerName: ownerName,
               ownerType: ownerType,
             };
-            
+
             const ownerResult = await db.insert(owners).values(ownerValues)
               .onConflictDoUpdate({
                 target: owners.ownerName,
@@ -322,7 +335,17 @@ async function main() {
             seenOwners.set(ownerKey, ownerId);
             stats.owners++;
           }
-          
+
+          // A real owner is taking over an APN a seed/test row previously
+          // claimed: that seed row's mailing never really happened, so purge
+          // its links to this property rather than letting it block or
+          // shadow the real owner being linked in below.
+          if (claimedBy?.isSeed && !rowIsSeed && claimedBy.ownerId !== ownerId) {
+            await deleteSeedOwnerLinksForProperty(db, propertyId, claimedBy.ownerId);
+            stats.seedOwnersReplaced++;
+          }
+          apnOwnerByApn.set(apn, { ownerId, isSeed: rowIsSeed });
+
           // ========== PROPERTY_OWNERS ==========
           await db.insert(propertyOwners).values({
             propertyId: propertyId,
@@ -429,7 +452,7 @@ async function main() {
   }
   
   console.log('\n=== IMPORT COMPLETE ===');
-  console.log(`Total unique APNs: ${seenApns.size}`);
+  console.log(`Total unique APNs: ${apnOwnerByApn.size}`);
   console.log(`Properties inserted: ${stats.properties}`);
   console.log(`Owners inserted: ${stats.owners}`);
   console.log(`Property-Owner links: ${stats.propertyOwners}`);
@@ -438,6 +461,7 @@ async function main() {
   console.log(`Suppression records: ${stats.suppressions}`);
   console.log(`Deals created: ${stats.deals}`);
   console.log(`Rows skipped (duplicates/no APN): ${stats.skipped}`);
+  console.log(`Seed owners replaced by real owners: ${stats.seedOwnersReplaced}`);
   console.log(`Errors: ${stats.errors}`);
   
   await pool.end();
