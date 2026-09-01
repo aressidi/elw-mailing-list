@@ -12,11 +12,12 @@ import { Deals } from './pages/deals.tsx';
 import { Suppression } from './pages/suppression.tsx';
 import { LoginPage } from './pages/login.tsx';
 import { Layout } from './components/Layout.tsx';
-import { isAuthenticated } from './lib/auth.ts';
+import { useIsAuthenticated } from './lib/auth.ts';
 
 function App() {
   const [status, setStatus] = useState<'loading' | 'ready'>('loading');
   const [enabled, setEnabled] = useState(false);
+  const authed = useIsAuthenticated();
 
   useEffect(() => {
     fetch('/api/auth/config')
@@ -34,7 +35,7 @@ function App() {
     );
   }
 
-  if (enabled && !isAuthenticated()) {
+  if (enabled && !authed) {
     return <LoginPage />;
   }
 
