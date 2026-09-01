@@ -15,4 +15,12 @@ services:
         value: https://elw-mailing-list.vercel.app
       - key: PORT
         value: 10000
+      - key: AUTH_ENABLED
+        value: 'true'
+      - key: AUTH_USERNAME
+        value: admin
+      - key: AUTH_PASSWORD
+        sync: false  # Set this in Render dashboard
+      - key: AUTH_JWT_SECRET
+        sync: false  # Set this in Render dashboard
     healthCheckPath: /api/health

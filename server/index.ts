@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import routes from './routes.js';
+import { loginHandler, authRequired, authConfigHandler } from './auth.js';
 
 dotenv.config();
 
@@ -19,6 +20,11 @@ app.use(express.json());
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Auth endpoints (public) and gate for everything mounted below
+app.post('/api/auth/login', loginHandler);
+app.get('/api/auth/config', authConfigHandler);
+app.use(authRequired);
 
 // Mount API routes
 app.use('/api', routes);
