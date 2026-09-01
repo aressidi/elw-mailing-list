@@ -10,7 +10,7 @@
     "resolveJsonModule": true,
     "declaration": true,
     "outDir": "./dist",
-    "rootDir": "."
+    "rootDir": ".."
   },
   "include": ["**/*", "../shared/**/*"],
   "exclude": ["node_modules", "dist"]

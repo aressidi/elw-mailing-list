@@ -9,7 +9,7 @@
     "dev:client": "vite",
     "build": "tsc && vite build",
     "build:server": "tsc -p server/tsconfig.json",
-    "start": "node server/dist/index.js",
+    "start": "node server/dist/server/index.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
