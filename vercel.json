@@ -7,7 +7,7 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "https://elw-mailing-list-api.onrender.com/api/$1"
+      "destination": "https://elw-mailing-list.onrender.com/api/$1"
     },
     {
       "source": "/(.*)",
