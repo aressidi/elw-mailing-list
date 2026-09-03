@@ -53,10 +53,21 @@ export const owners = pgTable('owners', {
   ownerName: varchar('owner_name', { length: 255 }).notNull(),
   ownerType: ownerTypeEnum('owner_type').default('individual'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  // Dedupe/merge bookkeeping (see scripts/merge-duplicate-owners.ts). A non-null
+  // archivedAt marks this row as a merge loser: all dependent rows have been
+  // repointed to mergedIntoId, and this row is kept only for audit history.
+  archivedAt: timestamp('archived_at', { withTimezone: true }),
+  mergedIntoId: integer('merged_into_id'),
 }, (table) => ({
   ownerNameIdx: index('owners_owner_name_idx').on(table.ownerName),
   lastNameIdx: index('owners_last_name_idx').on(table.lastName),
   ownerTypeIdx: index('owners_owner_type_idx').on(table.ownerType),
+  archivedAtIdx: index('owners_archived_at_idx').on(table.archivedAt),
+  mergedIntoFk: foreignKey({
+    name: 'owners_merged_into_id_fk',
+    columns: [table.mergedIntoId],
+    foreignColumns: [table.id],
+  }).onDelete('set null'),
 }));
 
 // ====================
@@ -198,12 +209,17 @@ export const propertiesRelations = relations(properties, ({ one, many }) => ({
   sourceMetadata: many(sourceMetadata),
 }));
 
-export const ownersRelations = relations(owners, ({ many }) => ({
+export const ownersRelations = relations(owners, ({ one, many }) => ({
   propertyOwners: many(propertyOwners),
   mailingAddresses: many(mailingAddresses),
   mailings: many(mailings),
   deals: many(deals),
   suppressions: many(mailingSuppression),
+  mergedInto: one(owners, {
+    fields: [owners.mergedIntoId],
+    references: [owners.id],
+    relationName: 'ownerMerge',
+  }),
 }));
 
 export const propertyOwnersRelations = relations(propertyOwners, ({ one }) => ({
