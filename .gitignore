@@ -33,6 +33,7 @@ npm-debug.log*
 # Database
 *.db
 *.sqlite
+backups/
 
 # Temporary files
 tmp/

@@ -7,6 +7,7 @@ import {
 import { eq, sql } from 'drizzle-orm';
 import { normalizeCampaignName, cleanSheetLink, UNASSIGNED_CAMPAIGN_NAME } from './campaign-normalize';
 import { isSeedOwner, deleteSeedOwnerLinksForProperty } from './seed-owner-utils';
+import { normalizeIdentityName, ownerIdentityKey } from './owner-identity';
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://localhost:5432/elw_mailing_list';
 const SHEET_ID = '1SrqwoqPlxmceae5y7DylTvUkVOXjyb58dsjDY3KQ7zA';
@@ -156,6 +157,8 @@ async function main() {
   let stats = {
     properties: 0,
     owners: 0,
+    ownersReused: 0,
+    ownersMismatchedAddress: 0,
     propertyOwners: 0,
     mailingAddresses: 0,
     campaigns: 0,
@@ -172,8 +175,15 @@ async function main() {
   // later real-owner row for the same APN is allowed to supersede an earlier
   // seed row (see the dedup check below), but never the reverse.
   const apnOwnerByApn = new Map<string, { ownerId: number; isSeed: boolean }>();
-  const ownerNameToId = new Map<string, number>(); // name -> id
-  const addressToId = new Map<string, number>(); // composite -> id
+  // Owner identity rule (see scripts/owner-identity.ts): reuse an existing
+  // owner ONLY when name + zip + full mailing address all match exactly.
+  // ownerIdentityToId is the authoritative dedup map; ownerNamesSeen is kept
+  // only to report how often a name recurred at a different address
+  // (stats.ownersMismatchedAddress), which is otherwise invisible once a
+  // new owner row is minted.
+  const ownerIdentityToId = new Map<string, number>(); // name+address key -> id
+  const ownerNamesSeen = new Set<string>(); // normalized name -> seen at least once
+  const addressToId = new Map<string, number>(); // owner+full-address composite -> id
 
   // Create default data source
   console.log('Creating data source...');
@@ -212,13 +222,28 @@ async function main() {
     return id;
   }
 
-  // Load existing owners from database first
+  // Load existing owners (joined to their mailing address, if any) so the
+  // in-run identity map matches the same name+zip+full-address rule applied
+  // to every row below. An owner with multiple pre-existing addresses (e.g.
+  // from data imported before this fix) contributes one identity-key entry
+  // per address, all pointing at that same owner id.
   console.log('Loading existing owners...');
-  const existingOwners = await db.select({ id: owners.id, ownerName: owners.ownerName }).from(owners);
+  const existingOwners = await db.select({
+    id: owners.id,
+    ownerName: owners.ownerName,
+    line1: mailingAddresses.addressLine1,
+    line2: mailingAddresses.addressLine2,
+    city: mailingAddresses.city,
+    state: mailingAddresses.state,
+    zip: mailingAddresses.zip,
+  }).from(owners).leftJoin(mailingAddresses, eq(mailingAddresses.ownerId, owners.id));
+  const existingOwnerIds = new Set<number>();
   for (const o of existingOwners) {
-    ownerNameToId.set(o.ownerName.toLowerCase().trim(), o.id);
+    existingOwnerIds.add(o.id);
+    ownerNamesSeen.add(normalizeIdentityName(o.ownerName));
+    ownerIdentityToId.set(ownerIdentityKey(o.ownerName, o), o.id);
   }
-  console.log(`Found ${existingOwners.length} existing owners`);
+  console.log(`Found ${existingOwnerIds.size} existing owners`);
   
   for (let batch = 0; batch < numBatches; batch++) {
     const startRow = batch * batchSize + 2;
@@ -290,14 +315,28 @@ async function main() {
           const propertyId = propertyResult[0].id;
           stats.properties++;
 
-          // ========== OWNER - check if exists first ==========
+          // ========== OWNER - resolve by name + zip + full mailing address ==========
+          // See scripts/owner-identity.ts: reuse an existing owner ONLY when
+          // name, zip, and the full mailing address all match exactly.
           const ownerType = getOwnerType(ownerName);
-          const ownerKey = ownerName.toLowerCase().trim();
+          const rowAddress = {
+            line1: row.mailingAddress1?.trim() || null,
+            line2: row.mailingAddress2?.trim() || null,
+            city: row.mailingCity?.trim() || null,
+            state: row.mailingState?.trim().toUpperCase() || null,
+            zip: row.mailingZip?.trim() || null,
+          };
+          const identityKey = ownerIdentityKey(ownerName, rowAddress);
+          const normalizedName = normalizeIdentityName(ownerName);
 
           let ownerId: number;
-          if (ownerNameToId.has(ownerKey)) {
-            ownerId = ownerNameToId.get(ownerKey)!;
+          if (ownerIdentityToId.has(identityKey)) {
+            ownerId = ownerIdentityToId.get(identityKey)!;
+            stats.ownersReused++;
           } else {
+            if (ownerNamesSeen.has(normalizedName)) {
+              stats.ownersMismatchedAddress++;
+            }
             const ownerResult = await db.insert(owners).values({
               firstName: row.ownerFirstName?.trim() || null,
               lastName: row.ownerLastName?.trim() || null,
@@ -305,7 +344,8 @@ async function main() {
               ownerType: ownerType,
             }).returning();
             ownerId = ownerResult[0].id;
-            ownerNameToId.set(ownerKey, ownerId);
+            ownerIdentityToId.set(identityKey, ownerId);
+            ownerNamesSeen.add(normalizedName);
             stats.owners++;
           }
 
@@ -325,28 +365,28 @@ async function main() {
             ownerId: ownerId,
           }).onConflictDoNothing();
           stats.propertyOwners++;
-          
+
           // ========== MAILING ADDRESS ==========
           if (row.mailingAddress1 || row.mailingCity) {
-            const addressKey = `${ownerId}|${row.mailingAddress1?.toLowerCase().trim() || ''}|${row.mailingCity?.toLowerCase().trim() || ''}|${row.mailingZip?.trim() || ''}`;
-            
+            const addressKey = `${ownerId}|${identityKey}`;
+
             let mailingAddressId: number;
             if (addressToId.has(addressKey)) {
               mailingAddressId = addressToId.get(addressKey)!;
             } else {
               const addressResult = await db.insert(mailingAddresses).values({
                 ownerId: ownerId,
-                addressLine1: row.mailingAddress1?.trim() || null,
-                addressLine2: row.mailingAddress2?.trim() || null,
-                city: row.mailingCity?.trim() || null,
-                state: row.mailingState?.trim().toUpperCase() || null,
-                zip: row.mailingZip?.trim() || null,
+                addressLine1: rowAddress.line1,
+                addressLine2: rowAddress.line2,
+                city: rowAddress.city,
+                state: rowAddress.state,
+                zip: rowAddress.zip,
               }).returning();
               mailingAddressId = addressResult[0].id;
               addressToId.set(addressKey, mailingAddressId);
               stats.mailingAddresses++;
             }
-            
+
             // ========== MAILING ==========
             const mailDate = parseDate(row.mailingDate1);
             if (mailDate || row.offerPrice) {
@@ -424,7 +464,9 @@ async function main() {
   console.log('\n=== IMPORT COMPLETE ===');
   console.log(`Total unique APNs: ${apnOwnerByApn.size}`);
   console.log(`Properties inserted: ${stats.properties}`);
-  console.log(`Owners inserted: ${stats.owners}`);
+  console.log(`Owners created: ${stats.owners}`);
+  console.log(`Owners reused (name+zip+address matched): ${stats.ownersReused}`);
+  console.log(`Owners created despite name match (address mismatch): ${stats.ownersMismatchedAddress}`);
   console.log(`Property-Owner links: ${stats.propertyOwners}`);
   console.log(`Mailing addresses: ${stats.mailingAddresses}`);
   console.log(`Mailings created: ${stats.mailings}`);
