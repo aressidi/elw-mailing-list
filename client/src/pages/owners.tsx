@@ -1,11 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation, Link } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
-import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
+import { DataTable, ColumnDef, ColumnFilters } from '../components/ui/DataTable.tsx';
 import { useOwners, Owner } from '../hooks/use-api.ts';
 import { formatDate } from '../lib/format.ts';
 import { Users, Loader2 } from 'lucide-react';
+
+// How long to wait after a column filter changes before hitting the server,
+// so rapid Apply/Reset clicks don't each trigger their own request.
+const FILTER_DEBOUNCE_MS = 350;
 
 const OWNER_TYPES = [
   { value: 'individual', label: 'Individual' },
@@ -18,11 +22,31 @@ const OWNER_TYPES = [
 export function Owners() {
   const [, navigate] = useLocation();
   const [page, setPage] = useState(1);
+  const [columnFilters, setColumnFilters] = useState<ColumnFilters>({});
+  const [nameFilters, setNameFilters] = useState<{ ownerName?: string; firstName?: string; lastName?: string }>({});
 
-  // We load a generous limit so client-side table sorting & column filtering is fast & comprehensive
-  const { data, isLoading } = useOwners({
-    page,
+  // Debounce column filter changes before sending them to the server, since
+  // ownerName/firstName/lastName filtering must search the whole table, not
+  // just whichever page happens to be loaded client-side.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setNameFilters({
+        ownerName: columnFilters.ownerName?.value?.trim() || undefined,
+        firstName: columnFilters.firstName?.value?.trim() || undefined,
+        lastName: columnFilters.lastName?.value?.trim() || undefined,
+      });
+    }, FILTER_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [columnFilters.ownerName?.value, columnFilters.firstName?.value, columnFilters.lastName?.value]);
+
+  const hasNameFilter = !!(nameFilters.ownerName || nameFilters.firstName || nameFilters.lastName);
+
+  // We load a generous limit so client-side table sorting & column filtering is fast & comprehensive.
+  // When a name filter is active, it's applied server-side across the whole table (not just this page).
+  const { data, isLoading, isFetching } = useOwners({
+    page: hasNameFilter ? 1 : page,
     limit: 100,
+    ...nameFilters,
   });
 
   const owners = data?.data || [];
@@ -112,15 +136,24 @@ export function Owners() {
               <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
             </div>
           ) : (
-            <DataTable
-              data={owners}
-              columns={columns}
-              storageKey="owners_view"
-              onRowClick={handleRowClick}
-              emptyIcon={<Users className="w-12 h-12" />}
-              emptyText="No owners found"
-              emptySubtext="Try adjusting your column filters or search"
-            />
+            <div className="relative">
+              {isFetching && (
+                <div className="absolute -top-2 right-0 flex items-center gap-1.5 text-xs text-blue-600">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Updating...
+                </div>
+              )}
+              <DataTable
+                data={owners}
+                columns={columns}
+                storageKey="owners_view_v2"
+                onFilterChange={setColumnFilters}
+                onRowClick={handleRowClick}
+                emptyIcon={<Users className="w-12 h-12" />}
+                emptyText="No owners found"
+                emptySubtext="Try adjusting your column filters or search"
+              />
+            </div>
           )}
         </CardContent>
       </Card>

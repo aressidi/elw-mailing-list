@@ -72,11 +72,14 @@ export function usePropertySearch(q: string, limit = 20) {
 }
 
 // ─── Owners ──────────────────────────────────────────────────
-export function useOwners(params?: { page?: number; limit?: number; name?: string; state?: string }) {
+export function useOwners(params?: { page?: number; limit?: number; name?: string; firstName?: string; lastName?: string; ownerName?: string; state?: string }) {
   const query = new URLSearchParams();
   if (params?.page) query.set('page', String(params.page));
   if (params?.limit) query.set('limit', String(params.limit));
   if (params?.name) query.set('name', params.name);
+  if (params?.firstName) query.set('firstName', params.firstName);
+  if (params?.lastName) query.set('lastName', params.lastName);
+  if (params?.ownerName) query.set('ownerName', params.ownerName);
   if (params?.state) query.set('state', params.state);
 
   return useQuery({

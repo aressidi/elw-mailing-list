@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { eq, and, like, desc, asc, sql, count, isNull, not, or, gte, lte, inArray } from 'drizzle-orm';
+import { eq, and, like, ilike, desc, asc, sql, count, isNull, not, or, gte, lte, inArray } from 'drizzle-orm';
 import { db, pool } from './db.js';
 import {
   properties,
@@ -332,17 +332,26 @@ router.post('/properties/bulk', async (req, res) => {
 router.get('/owners', async (req, res) => {
   try {
     const { limit, offset, page } = getPagination(req);
-    const { name, state, sortBy = 'id', sortOrder = 'asc' } = req.query;
+    const { name, firstName, lastName, ownerName, state, sortBy = 'id', sortOrder = 'asc' } = req.query;
 
     let conditions = [];
     if (name) {
       conditions.push(
         or(
-          like(owners.firstName, `%${name}%`),
-          like(owners.lastName, `%${name}%`),
-          like(owners.ownerName, `%${name}%`)
+          ilike(owners.firstName, `%${name}%`),
+          ilike(owners.lastName, `%${name}%`),
+          ilike(owners.ownerName, `%${name}%`)
         )
       );
+    }
+    if (firstName) {
+      conditions.push(ilike(owners.firstName, `%${firstName}%`));
+    }
+    if (lastName) {
+      conditions.push(ilike(owners.lastName, `%${lastName}%`));
+    }
+    if (ownerName) {
+      conditions.push(ilike(owners.ownerName, `%${ownerName}%`));
     }
 
     // For state filter, we need to check mailing addresses
