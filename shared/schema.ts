@@ -1,4 +1,4 @@
-import { pgTable, serial, varchar, text, integer, decimal, timestamp, boolean, pgEnum, index, uniqueIndex, foreignKey, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, serial, varchar, text, integer, decimal, timestamp, boolean, jsonb, pgEnum, index, uniqueIndex, foreignKey, primaryKey } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createInsertSchema } from 'drizzle-zod';
 import { z } from 'zod';
@@ -34,6 +34,7 @@ export const properties = pgTable('properties', {
   legalDescription: text('legal_description'),
   dataSourceId: integer('data_source_id').references(() => dataSources.id, { onDelete: 'set null' }),
   sourceAcquiredDate: timestamp('source_acquired_date', { withTimezone: true }),
+  rawData: jsonb('raw_data'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   apnIdx: uniqueIndex('properties_apn_idx').on(table.apn),
@@ -52,6 +53,9 @@ export const owners = pgTable('owners', {
   lastName: varchar('last_name', { length: 100 }),
   ownerName: varchar('owner_name', { length: 255 }).notNull(),
   ownerType: ownerTypeEnum('owner_type').default('individual'),
+  phone: varchar('phone', { length: 50 }),
+  email: varchar('email', { length: 255 }),
+  rawData: jsonb('raw_data'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   // Dedupe/merge bookkeeping (see scripts/merge-duplicate-owners.ts). A non-null
   // archivedAt marks this row as a merge loser: all dependent rows have been

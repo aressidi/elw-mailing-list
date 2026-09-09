@@ -15,6 +15,13 @@
       "when": 1788399937346,
       "tag": "0001_tense_franklin_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789077600000,
+      "tag": "0002_wooden_micromacro",
+      "breakpoints": true
     }
   ]
 }
