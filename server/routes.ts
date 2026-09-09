@@ -11,8 +11,19 @@ import {
   mailingSuppression,
   propertyOwners,
 } from '../shared/schema.js';
+import { ownerIdentityKey } from '../scripts/owner-identity.js';
 
 const router = Router();
+
+// Bulk endpoints cap each request to this many items so a single import
+// batch can't monopolize a connection from the pool.
+const MAX_BULK_BATCH = 500;
+
+// Light dedupe key for campaign names: trim + collapse whitespace + fold
+// case, so "Foo Campaign" and "foo   campaign" resolve to the same campaign.
+function normalizeCampaignKey(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').toLowerCase();
+}
 
 // ============================================================
 // Health Check
@@ -270,7 +281,9 @@ router.get('/properties/:id', async (req, res) => {
   }
 });
 
-// POST /api/properties/bulk - Bulk create properties
+// POST /api/properties/bulk - Bulk upsert properties by APN. Existing rows
+// (matched by APN) have their provided fields updated in place instead of
+// being re-created; returns which APNs were skipped (i.e. already existed).
 router.post('/properties/bulk', async (req, res) => {
   try {
     const { properties: propertiesList } = req.body;
@@ -278,33 +291,60 @@ router.post('/properties/bulk', async (req, res) => {
     if (!Array.isArray(propertiesList) || propertiesList.length === 0) {
       return res.status(400).json(errorResponse('properties array is required and must not be empty', 400));
     }
+    if (propertiesList.length > MAX_BULK_BATCH) {
+      return res.status(400).json(errorResponse(`properties array must not exceed ${MAX_BULK_BATCH} items`, 400));
+    }
 
     const createdIds: number[] = [];
+    const skippedApns: string[] = [];
+    const errors: { index: number; error: string }[] = [];
     let created = 0;
-    let duplicates = 0;
+    let skipped = 0;
 
-    for (const prop of propertiesList) {
-      // Check for duplicate by APN
+    for (let i = 0; i < propertiesList.length; i++) {
+      const prop = propertiesList[i];
+      const apn = typeof prop?.apn === 'string' ? prop.apn.trim() : '';
+      if (!apn) {
+        errors.push({ index: i, error: 'apn is required' });
+        continue;
+      }
+
       const existing = await db
-        .select()
+        .select({ id: properties.id })
         .from(properties)
-        .where(eq(properties.apn, prop.apn))
+        .where(eq(properties.apn, apn))
         .limit(1);
 
       if (existing.length > 0) {
-        duplicates++;
+        skipped++;
+        skippedApns.push(apn);
+
+        const updates: Record<string, any> = {};
+        if (prop.state !== undefined) updates.state = prop.state;
+        if (prop.county !== undefined) updates.county = prop.county;
+        if (prop.zip !== undefined) updates.zip = prop.zip;
+        if (prop.latitude !== undefined) updates.latitude = prop.latitude;
+        if (prop.longitude !== undefined) updates.longitude = prop.longitude;
+        if (prop.acres !== undefined) updates.acres = prop.acres;
+        if (prop.legalDescription !== undefined) updates.legalDescription = prop.legalDescription;
+        if (prop.rawData !== undefined) updates.rawData = prop.rawData;
+
+        if (Object.keys(updates).length > 0) {
+          await db.update(properties).set(updates).where(eq(properties.id, existing[0].id));
+        }
         continue;
       }
 
       const result = await db.insert(properties).values({
-        apn: prop.apn,
-        state: prop.state,
-        county: prop.county,
-        acres: prop.acres,
-        legalDescription: prop.legalDescription,
-        zip: prop.zip,
+        apn,
+        state: prop.state || null,
+        county: prop.county || null,
+        zip: prop.zip || null,
         latitude: prop.latitude,
         longitude: prop.longitude,
+        acres: prop.acres,
+        legalDescription: prop.legalDescription || null,
+        rawData: prop.rawData,
       }).returning();
 
       if (result[0]) {
@@ -315,8 +355,10 @@ router.post('/properties/bulk', async (req, res) => {
 
     res.status(201).json(successResponse({
       created,
-      duplicates,
+      skipped,
+      skippedApns,
       ids: createdIds,
+      errors,
     }));
   } catch (error) {
     console.error('Error bulk creating properties:', error);
@@ -479,7 +521,10 @@ router.get('/owners/:id', async (req, res) => {
   }
 });
 
-// POST /api/owners/bulk - Bulk create owners
+// POST /api/owners/bulk - Bulk create owners. Dedupes using the authoritative
+// owner identity rule (see scripts/owner-identity.ts): an owner row is reused
+// only when name + zip + full mailing address all match exactly -- the same
+// name at a different address is treated as a different person.
 router.post('/owners/bulk', async (req, res) => {
   try {
     const { owners: ownersList } = req.body;
@@ -487,43 +532,91 @@ router.post('/owners/bulk', async (req, res) => {
     if (!Array.isArray(ownersList) || ownersList.length === 0) {
       return res.status(400).json(errorResponse('owners array is required and must not be empty', 400));
     }
+    if (ownersList.length > MAX_BULK_BATCH) {
+      return res.status(400).json(errorResponse(`owners array must not exceed ${MAX_BULK_BATCH} items`, 400));
+    }
 
-    // Pre-fetch all existing owner names for duplicate detection
-    const allOwners = await db.select({ id: owners.id, ownerName: owners.ownerName }).from(owners);
-    const existingNormalizedNames = new Set(
-      allOwners.map(o => o.ownerName.replace(/\s+/g, '').toLowerCase())
-    );
+    // Pre-fetch existing owners joined to their mailing address so the
+    // identity map matches the name+zip+full-address rule applied below.
+    const existingOwners = await db
+      .select({
+        id: owners.id,
+        ownerName: owners.ownerName,
+        line1: mailingAddresses.addressLine1,
+        line2: mailingAddresses.addressLine2,
+        city: mailingAddresses.city,
+        state: mailingAddresses.state,
+        zip: mailingAddresses.zip,
+      })
+      .from(owners)
+      .leftJoin(mailingAddresses, eq(mailingAddresses.ownerId, owners.id));
+
+    const identityToId = new Map<string, number>();
+    for (const o of existingOwners) {
+      identityToId.set(ownerIdentityKey(o.ownerName, o), o.id);
+    }
 
     const createdIds: number[] = [];
+    const errors: { index: number; error: string }[] = [];
     let created = 0;
-    let duplicates = 0;
+    let skipped = 0;
 
-    for (const owner of ownersList) {
-      const normalizedName = owner.ownerName?.replace(/\s+/g, '').toLowerCase();
+    for (let i = 0; i < ownersList.length; i++) {
+      const owner = ownersList[i];
+      const ownerName = typeof owner?.ownerName === 'string' ? owner.ownerName.trim() : '';
+      if (!ownerName) {
+        errors.push({ index: i, error: 'ownerName is required' });
+        continue;
+      }
 
-      if (!normalizedName || existingNormalizedNames.has(normalizedName)) {
-        duplicates++;
+      const address = {
+        line1: owner.addressLine1 || null,
+        line2: owner.addressLine2 || null,
+        city: owner.city || null,
+        state: owner.state || null,
+        zip: owner.zip || null,
+      };
+      const identityKey = ownerIdentityKey(ownerName, address);
+
+      if (identityToId.has(identityKey)) {
+        skipped++;
         continue;
       }
 
       const result = await db.insert(owners).values({
-        ownerName: owner.ownerName,
-        firstName: owner.firstName,
-        lastName: owner.lastName,
+        ownerName,
+        firstName: owner.firstName || null,
+        lastName: owner.lastName || null,
         ownerType: owner.ownerType,
+        phone: owner.phone || null,
+        email: owner.email || null,
+        rawData: owner.rawData,
       }).returning();
 
-      if (result[0]) {
-        createdIds.push(result[0].id);
-        created++;
-        existingNormalizedNames.add(normalizedName);
+      const ownerId = result[0]?.id;
+      if (!ownerId) continue;
+
+      if (address.line1 || address.city) {
+        await db.insert(mailingAddresses).values({
+          ownerId,
+          addressLine1: address.line1,
+          addressLine2: address.line2,
+          city: address.city,
+          state: address.state,
+          zip: address.zip,
+        });
       }
+
+      identityToId.set(identityKey, ownerId);
+      createdIds.push(ownerId);
+      created++;
     }
 
     res.status(201).json(successResponse({
       created,
-      duplicates,
+      skipped,
       ids: createdIds,
+      errors,
     }));
   } catch (error) {
     console.error('Error bulk creating owners:', error);
@@ -775,7 +868,10 @@ router.get('/campaigns/:id', async (req, res) => {
   }
 });
 
-// POST /api/campaigns - Create single campaign
+// POST /api/campaigns - Create a campaign if one with this (normalized) name
+// doesn't already exist. Idempotent: repeated calls with the same name
+// return the existing campaign instead of erroring, which keeps this
+// endpoint safe to call from the Rocketmail bulk importer.
 router.post('/campaigns', async (req, res) => {
   try {
     const { name, link } = req.body;
@@ -784,23 +880,25 @@ router.post('/campaigns', async (req, res) => {
       return res.status(400).json(errorResponse('name is required', 400));
     }
 
-    // Check if campaign with same name exists
+    const trimmedName = name.trim();
+
+    // Check if a campaign with the same normalized name exists
     const existing = await db
       .select()
       .from(campaigns)
-      .where(eq(campaigns.name, name.trim()))
+      .where(ilike(campaigns.name, trimmedName))
       .limit(1);
 
     if (existing.length > 0) {
-      return res.status(409).json(errorResponse('Campaign with this name already exists', 409));
+      return res.status(200).json(successResponse(existing[0], { created: false }));
     }
 
     const result = await db.insert(campaigns).values({
-      name: name.trim(),
+      name: trimmedName,
       link,
     }).returning();
 
-    res.status(201).json(successResponse(result[0]));
+    res.status(201).json(successResponse(result[0], { created: true }));
   } catch (error) {
     console.error('Error creating campaign:', error);
     res.status(500).json(errorResponse('Failed to create campaign'));
@@ -1056,41 +1154,242 @@ router.get('/mailings', async (req, res) => {
   }
 });
 
-// POST /api/mailings/bulk - Bulk create mailings
+// POST /api/mailings/bulk - Bulk create mailings. Each item can link to an
+// existing property/owner/campaign by id, or resolve/create one by apn /
+// owner identity (name+zip+address, see scripts/owner-identity.ts) / campaign
+// name. A top-level campaignId applies to items that don't specify their own
+// campaign fields.
 router.post('/mailings/bulk', async (req, res) => {
   try {
-    const { campaignId, mailings: mailingsList } = req.body;
-
-    if (!campaignId || typeof campaignId !== 'number') {
-      return res.status(400).json(errorResponse('campaignId is required and must be a number', 400));
-    }
+    const { campaignId: fallbackCampaignIdRaw, mailings: mailingsList } = req.body;
 
     if (!Array.isArray(mailingsList) || mailingsList.length === 0) {
       return res.status(400).json(errorResponse('mailings array is required and must not be empty', 400));
     }
+    if (mailingsList.length > MAX_BULK_BATCH) {
+      return res.status(400).json(errorResponse(`mailings array must not exceed ${MAX_BULK_BATCH} items`, 400));
+    }
 
-    // Verify campaign exists
-    const campaign = await db
-      .select()
-      .from(campaigns)
-      .where(eq(campaigns.id, campaignId))
-      .limit(1);
+    // ---- Property cache (lazy: point lookups/creates by APN) ----
+    const propertyIdByApn = new Map<string, number>();
+    const verifiedPropertyIds = new Set<number>();
 
-    if (campaign.length === 0) {
-      return res.status(404).json(errorResponse('Campaign not found', 404));
+    // ---- Owner cache (preloaded, matches the name+zip+address identity rule) ----
+    const existingOwners = await db
+      .select({
+        id: owners.id,
+        ownerName: owners.ownerName,
+        addressId: mailingAddresses.id,
+        line1: mailingAddresses.addressLine1,
+        line2: mailingAddresses.addressLine2,
+        city: mailingAddresses.city,
+        state: mailingAddresses.state,
+        zip: mailingAddresses.zip,
+      })
+      .from(owners)
+      .leftJoin(mailingAddresses, eq(mailingAddresses.ownerId, owners.id));
+
+    const identityToOwnerId = new Map<string, number>();
+    const ownerAddressId = new Map<string, number>();
+    const verifiedOwnerIds = new Set<number>();
+    for (const o of existingOwners) {
+      verifiedOwnerIds.add(o.id);
+      const key = ownerIdentityKey(o.ownerName, o);
+      identityToOwnerId.set(key, o.id);
+      if (o.addressId) ownerAddressId.set(`${o.id}|${key}`, o.addressId);
+    }
+
+    // ---- Campaign cache (preloaded; small table) ----
+    const existingCampaigns = await db.select({ id: campaigns.id, name: campaigns.name }).from(campaigns);
+    const campaignIdByKey = new Map<string, number>();
+    const verifiedCampaignIds = new Set<number>();
+    for (const c of existingCampaigns) {
+      verifiedCampaignIds.add(c.id);
+      const key = normalizeCampaignKey(c.name);
+      if (!campaignIdByKey.has(key)) campaignIdByKey.set(key, c.id);
+    }
+
+    let fallbackCampaignId: number | null = null;
+    if (fallbackCampaignIdRaw !== undefined && fallbackCampaignIdRaw !== null) {
+      const id = Number(fallbackCampaignIdRaw);
+      if (!Number.isInteger(id)) {
+        return res.status(400).json(errorResponse('campaignId must be an integer', 400));
+      }
+      if (!verifiedCampaignIds.has(id)) {
+        return res.status(404).json(errorResponse('Campaign not found', 404));
+      }
+      fallbackCampaignId = id;
+    }
+
+    async function resolvePropertyId(item: any): Promise<{ propertyId: number | null; error?: string }> {
+      if (item.propertyId !== undefined && item.propertyId !== null) {
+        const id = Number(item.propertyId);
+        if (!Number.isInteger(id)) return { propertyId: null, error: 'propertyId must be an integer' };
+        if (!verifiedPropertyIds.has(id)) {
+          const found = await db.select({ id: properties.id }).from(properties).where(eq(properties.id, id)).limit(1);
+          if (found.length === 0) return { propertyId: null, error: `propertyId ${id} not found` };
+          verifiedPropertyIds.add(id);
+        }
+        return { propertyId: id };
+      }
+
+      if (typeof item.apn === 'string' && item.apn.trim()) {
+        const apn = item.apn.trim();
+        const cached = propertyIdByApn.get(apn);
+        if (cached !== undefined) return { propertyId: cached };
+
+        const existing = await db.select({ id: properties.id }).from(properties).where(eq(properties.apn, apn)).limit(1);
+        if (existing.length > 0) {
+          propertyIdByApn.set(apn, existing[0].id);
+          return { propertyId: existing[0].id };
+        }
+
+        const createdProp = await db.insert(properties).values({
+          apn,
+          state: item.propertyState || null,
+          county: item.propertyCounty || null,
+          zip: item.propertyZip || null,
+          rawData: item.propertyRawData,
+        }).returning();
+        propertyIdByApn.set(apn, createdProp[0].id);
+        return { propertyId: createdProp[0].id };
+      }
+
+      return { propertyId: null };
+    }
+
+    async function resolveOwnerId(item: any): Promise<{ ownerId: number | null; mailingAddressId: number | null; error?: string }> {
+      if (item.ownerId !== undefined && item.ownerId !== null) {
+        const id = Number(item.ownerId);
+        if (!Number.isInteger(id)) return { ownerId: null, mailingAddressId: null, error: 'ownerId must be an integer' };
+        if (!verifiedOwnerIds.has(id)) {
+          const found = await db.select({ id: owners.id }).from(owners).where(eq(owners.id, id)).limit(1);
+          if (found.length === 0) return { ownerId: null, mailingAddressId: null, error: `ownerId ${id} not found` };
+          verifiedOwnerIds.add(id);
+        }
+        return { ownerId: id, mailingAddressId: null };
+      }
+
+      if (typeof item.ownerName === 'string' && item.ownerName.trim()) {
+        const ownerName = item.ownerName.trim();
+        const address = {
+          line1: item.addressLine1 || null,
+          line2: item.addressLine2 || null,
+          city: item.city || null,
+          state: item.state || null,
+          zip: item.zip || null,
+        };
+        const identityKey = ownerIdentityKey(ownerName, address);
+
+        let ownerId = identityToOwnerId.get(identityKey);
+        if (ownerId === undefined) {
+          const createdOwner = await db.insert(owners).values({
+            ownerName,
+            firstName: item.firstName || null,
+            lastName: item.lastName || null,
+            ownerType: item.ownerType,
+            phone: item.phone || null,
+            email: item.email || null,
+            rawData: item.ownerRawData,
+          }).returning();
+          ownerId = createdOwner[0].id;
+          identityToOwnerId.set(identityKey, ownerId);
+        }
+
+        const addressKey = `${ownerId}|${identityKey}`;
+        let mailingAddressId = ownerAddressId.get(addressKey) ?? null;
+        if (!mailingAddressId && (address.line1 || address.city)) {
+          const addrResult = await db.insert(mailingAddresses).values({
+            ownerId,
+            addressLine1: address.line1,
+            addressLine2: address.line2,
+            city: address.city,
+            state: address.state,
+            zip: address.zip,
+          }).returning();
+          mailingAddressId = addrResult[0].id;
+          ownerAddressId.set(addressKey, mailingAddressId);
+        }
+
+        return { ownerId, mailingAddressId };
+      }
+
+      return { ownerId: null, mailingAddressId: null };
+    }
+
+    async function resolveCampaignId(item: any): Promise<{ campaignId: number | null; error?: string }> {
+      if (item.campaignId !== undefined && item.campaignId !== null) {
+        const id = Number(item.campaignId);
+        if (!Number.isInteger(id)) return { campaignId: null, error: 'campaignId must be an integer' };
+        if (!verifiedCampaignIds.has(id)) {
+          const found = await db.select({ id: campaigns.id }).from(campaigns).where(eq(campaigns.id, id)).limit(1);
+          if (found.length === 0) return { campaignId: null, error: `campaignId ${id} not found` };
+          verifiedCampaignIds.add(id);
+        }
+        return { campaignId: id };
+      }
+
+      if (typeof item.campaignName === 'string' && item.campaignName.trim()) {
+        const name = item.campaignName.trim();
+        const key = normalizeCampaignKey(name);
+        let campId = campaignIdByKey.get(key);
+        if (campId === undefined) {
+          const createdCampaign = await db.insert(campaigns).values({
+            name,
+            link: item.campaignLink || null,
+          }).returning();
+          campId = createdCampaign[0].id;
+          campaignIdByKey.set(key, campId);
+        }
+        return { campaignId: campId };
+      }
+
+      return { campaignId: fallbackCampaignId };
     }
 
     const createdIds: number[] = [];
+    const errors: { index: number; error: string }[] = [];
     let created = 0;
 
-    for (const mailing of mailingsList) {
+    for (let i = 0; i < mailingsList.length; i++) {
+      const item = mailingsList[i];
+      if (!item || typeof item !== 'object') {
+        errors.push({ index: i, error: 'mailing item must be an object' });
+        continue;
+      }
+
+      const propResult = await resolvePropertyId(item);
+      if (propResult.error) {
+        errors.push({ index: i, error: propResult.error });
+        continue;
+      }
+
+      const ownerResult = await resolveOwnerId(item);
+      if (ownerResult.error) {
+        errors.push({ index: i, error: ownerResult.error });
+        continue;
+      }
+
+      const campResult = await resolveCampaignId(item);
+      if (campResult.error) {
+        errors.push({ index: i, error: campResult.error });
+        continue;
+      }
+
+      if (propResult.propertyId && ownerResult.ownerId) {
+        await db.insert(propertyOwners).values({
+          propertyId: propResult.propertyId,
+          ownerId: ownerResult.ownerId,
+        }).onConflictDoNothing();
+      }
+
       const result = await db.insert(mailings).values({
-        campaignId,
-        propertyId: mailing.propertyId,
-        ownerId: mailing.ownerId,
-        mailingAddressId: mailing.mailingAddressId,
-        mailDate: mailing.mailDate ? new Date(mailing.mailDate) : null,
-        offerPrice: mailing.offerPrice,
+        propertyId: propResult.propertyId,
+        ownerId: ownerResult.ownerId,
+        mailingAddressId: ownerResult.mailingAddressId,
+        campaignId: campResult.campaignId,
+        mailDate: item.mailDate ? new Date(item.mailDate) : null,
+        offerPrice: item.offerPrice,
       }).returning();
 
       if (result[0]) {
@@ -1102,6 +1401,7 @@ router.post('/mailings/bulk', async (req, res) => {
     res.status(201).json(successResponse({
       created,
       ids: createdIds,
+      errors,
     }));
   } catch (error) {
     console.error('Error bulk creating mailings:', error);
