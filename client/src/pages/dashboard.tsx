@@ -32,8 +32,6 @@ import {
   PieChart,
   Pie,
   Cell,
-  LineChart,
-  Line,
 } from 'recharts';
 import { formatNumber, formatCurrency, formatPercent } from '../lib/format.ts';
 
@@ -283,7 +281,7 @@ export function Dashboard() {
                 ) : (
                   <div className="h-64">
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={mailVolume}>
+                      <BarChart data={mailVolume}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                         <XAxis dataKey="month" tick={{ fontSize: 10 }} angle={-45} textAnchor="end" height={60} />
                         <YAxis tick={{ fontSize: 12 }} />
@@ -291,8 +289,8 @@ export function Dashboard() {
                           formatter={(value: number) => [formatNumber(value), 'Mailings']}
                           contentStyle={{ borderRadius: 8, border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                         />
-                        <Line type="monotone" dataKey="count" stroke="#f59e0b" strokeWidth={3} dot={{ fill: '#f59e0b', r: 4 }} activeDot={{ r: 6 }} />
-                      </LineChart>
+                        <Bar dataKey="count" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                      </BarChart>
                     </ResponsiveContainer>
                   </div>
                 )}
