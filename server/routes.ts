@@ -175,8 +175,8 @@ router.get('/properties', async (req, res) => {
 
     let conditions = [];
     if (state) conditions.push(eq(properties.state, state as string));
-    if (county) conditions.push(like(properties.county, `%${county}%`));
-    if (apn) conditions.push(like(properties.apn, `%${apn}%`));
+    if (county) conditions.push(ilike(properties.county, `%${county}%`));
+    if (apn) conditions.push(ilike(properties.apn, `%${apn}%`));
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
