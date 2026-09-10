@@ -1,11 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation, Link } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
-import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
+import { DataTable, ColumnDef, ColumnFilters } from '../components/ui/DataTable.tsx';
 import { useProperties, Property } from '../hooks/use-api.ts';
 import { formatAcreage, formatNumber, truncate } from '../lib/format.ts';
 import { MapPin, Loader2 } from 'lucide-react';
+
+// How long to wait after a column filter changes before hitting the server,
+// so rapid Apply/Reset clicks don't each trigger their own request.
+const FILTER_DEBOUNCE_MS = 350;
 
 const US_STATES = [
   'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
@@ -18,10 +22,31 @@ const US_STATES = [
 export function Properties() {
   const [, navigate] = useLocation();
   const [page, setPage] = useState(1);
+  const [columnFilters, setColumnFilters] = useState<ColumnFilters>({});
+  const [serverFilters, setServerFilters] = useState<{ apn?: string; state?: string; county?: string }>({});
 
-  const { data, isLoading } = useProperties({
-    page,
+  // Debounce column filter changes before sending them to the server, since
+  // apn/county/state filtering must search the whole table, not just
+  // whichever page happens to be loaded client-side.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setServerFilters({
+        apn: columnFilters.apn?.value?.trim() || undefined,
+        state: columnFilters.state?.selectedOption || undefined,
+        county: columnFilters.county?.value?.trim() || undefined,
+      });
+    }, FILTER_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [columnFilters.apn?.value, columnFilters.state?.selectedOption, columnFilters.county?.value]);
+
+  const hasServerFilter = !!(serverFilters.apn || serverFilters.state || serverFilters.county);
+
+  // We load a generous limit so client-side table sorting & column filtering is fast & comprehensive.
+  // When an apn/state/county filter is active, it's applied server-side across the whole table (not just this page).
+  const { data, isLoading, isFetching } = useProperties({
+    page: hasServerFilter ? 1 : page,
     limit: 100,
+    ...serverFilters,
   });
 
   const properties = data?.data || [];
@@ -120,15 +145,24 @@ export function Properties() {
               <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
             </div>
           ) : (
-            <DataTable
-              data={properties}
-              columns={columns}
-              storageKey="properties_view"
-              onRowClick={handleRowClick}
-              emptyIcon={<MapPin className="w-12 h-12" />}
-              emptyText="No properties found"
-              emptySubtext="Try adjusting your column filters or sorting"
-            />
+            <div className="relative">
+              {isFetching && (
+                <div className="absolute -top-2 right-0 flex items-center gap-1.5 text-xs text-blue-600">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Updating...
+                </div>
+              )}
+              <DataTable
+                data={properties}
+                columns={columns}
+                storageKey="properties_view_v2"
+                onFilterChange={setColumnFilters}
+                onRowClick={handleRowClick}
+                emptyIcon={<MapPin className="w-12 h-12" />}
+                emptyText="No properties found"
+                emptySubtext="Try adjusting your column filters or sorting"
+              />
+            </div>
           )}
         </CardContent>
       </Card>
