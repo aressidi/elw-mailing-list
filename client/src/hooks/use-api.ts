@@ -302,7 +302,17 @@ export interface PaginatedResponse<T> {
   };
 }
 
-export interface Property {
+// Present on every returned/filtered property & owner row. lastOfferPrice
+// and lastOfferDate come from the mailing with the greatest mail_date (ties
+// broken by highest id); both are null when there are no mailings, or when
+// the newest mailing itself has a null offer_price -- never coerced to 0.
+export interface LastOfferFields {
+  lastOfferPrice: string | null;
+  lastOfferDate: string | null;
+  offerCount: number;
+}
+
+export interface Property extends LastOfferFields {
   id: number;
   apn: string;
   state: string | null;
@@ -317,7 +327,7 @@ export interface Property {
   createdAt: string;
 }
 
-export interface Owner {
+export interface Owner extends LastOfferFields {
   id: number;
   firstName: string | null;
   lastName: string | null;

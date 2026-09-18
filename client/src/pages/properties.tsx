@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef, ColumnFilters } from '../components/ui/DataTable.tsx';
 import { useProperties, Property } from '../hooks/use-api.ts';
-import { formatAcreage, formatNumber, truncate } from '../lib/format.ts';
+import { formatAcreage, formatNumber, truncate, formatCurrency } from '../lib/format.ts';
 import { MapPin, Loader2 } from 'lucide-react';
 
 // How long to wait after a column filter changes before hitting the server,
@@ -116,6 +116,15 @@ export function Properties() {
           {truncate(row.legalDescription, 45)}
         </span>
       ),
+    },
+    {
+      id: 'lastOfferPrice',
+      header: 'Last Offer',
+      accessorKey: 'lastOfferPrice',
+      filterType: 'number',
+      align: 'right',
+      cell: (row) => (row.lastOfferPrice != null ? formatCurrency(row.lastOfferPrice) : '-'),
+      comparator: (a, b) => (Number(a.lastOfferPrice) || 0) - (Number(b.lastOfferPrice) || 0),
     },
   ];
 

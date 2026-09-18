@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
 import { useOwner, Mailing, Deal, Property } from '../hooks/use-api.ts';
-import { formatDate, formatCurrency } from '../lib/format.ts';
+import { formatDate, formatCurrency, formatNumber } from '../lib/format.ts';
 import { ArrowLeft, Users, MapPin, Send, TrendingUp, Ban, Loader2, Mail } from 'lucide-react';
 
 export function OwnerDetail() {
@@ -189,7 +189,7 @@ export function OwnerDetail() {
       </div>
 
       {/* Owner Info */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <p className="text-sm text-gray-600">First Name</p>
@@ -206,6 +206,21 @@ export function OwnerDetail() {
           <CardContent className="p-4">
             <p className="text-sm text-gray-600">Type</p>
             <p className="text-lg font-bold text-gray-900 capitalize">{owner.ownerType}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm text-gray-600">Last Offer</p>
+            <p className="text-2xl font-bold text-gray-900">
+              {owner.lastOfferPrice != null ? formatCurrency(owner.lastOfferPrice) : '-'}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              {owner.offerCount > 0
+                ? `${formatNumber(owner.offerCount)} mailing${owner.offerCount === 1 ? '' : 's'}${
+                    owner.lastOfferDate ? ` · ${formatDate(owner.lastOfferDate)}` : ''
+                  }`
+                : 'No mailings'}
+            </p>
           </CardContent>
         </Card>
       </div>

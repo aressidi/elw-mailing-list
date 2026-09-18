@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
 import { useProperty, Mailing, Deal } from '../hooks/use-api.ts';
-import { formatAcreage, formatDate, formatCurrency } from '../lib/format.ts';
+import { formatAcreage, formatDate, formatCurrency, formatNumber } from '../lib/format.ts';
 import { ArrowLeft, MapPin, Users, Send, TrendingUp, Loader2 } from 'lucide-react';
 
 export function PropertyDetail() {
@@ -133,7 +133,7 @@ export function PropertyDetail() {
       </div>
 
       {/* Property Info */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <p className="text-sm text-gray-600">Acres</p>
@@ -150,6 +150,21 @@ export function PropertyDetail() {
           <CardContent className="p-4">
             <p className="text-sm text-gray-600">Longitude</p>
             <p className="text-2xl font-bold text-gray-900">{property.longitude || '-'}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm text-gray-600">Last Offer</p>
+            <p className="text-2xl font-bold text-gray-900">
+              {property.lastOfferPrice != null ? formatCurrency(property.lastOfferPrice) : '-'}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              {property.offerCount > 0
+                ? `${formatNumber(property.offerCount)} mailing${property.offerCount === 1 ? '' : 's'}${
+                    property.lastOfferDate ? ` · ${formatDate(property.lastOfferDate)}` : ''
+                  }`
+                : 'No mailings'}
+            </p>
           </CardContent>
         </Card>
       </div>

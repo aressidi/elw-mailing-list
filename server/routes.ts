@@ -164,6 +164,85 @@ function getSuppressionOrderBy(sortBy: string, sortOrder: string) {
 }
 
 // ============================================================
+// Last Offer Helpers
+// ============================================================
+// lastOfferPrice/lastOfferDate come from the mailing with the greatest
+// mail_date (ties broken by highest id) for a given property/owner;
+// offerCount is the total number of mailings for that record. Each is
+// computed in a single batched query keyed off the ids on the current page
+// (or a single id for detail routes), never one query per row.
+
+interface LastOfferInfo {
+  lastOfferPrice: string | null;
+  lastOfferDate: string | null;
+  offerCount: number;
+}
+
+async function getLastOfferByProperty(propertyIds: number[]): Promise<Map<number, LastOfferInfo>> {
+  if (propertyIds.length === 0) return new Map();
+  const result = await db.execute<{ id: number; offer_price: string | null; mail_date: string | null; offer_count: string }>(sql`
+    SELECT id, offer_price, mail_date, offer_count FROM (
+      SELECT
+        property_id AS id,
+        offer_price,
+        mail_date,
+        count(*) OVER (PARTITION BY property_id) AS offer_count,
+        row_number() OVER (PARTITION BY property_id ORDER BY mail_date DESC NULLS LAST, id DESC) AS rn
+      FROM mailings
+      WHERE property_id = ANY(${propertyIds})
+    ) sub
+    WHERE rn = 1
+  `);
+  const map = new Map<number, LastOfferInfo>();
+  for (const row of result.rows) {
+    map.set(Number(row.id), {
+      lastOfferPrice: row.offer_price,
+      lastOfferDate: row.mail_date,
+      offerCount: Number(row.offer_count),
+    });
+  }
+  return map;
+}
+
+async function getLastOfferByOwner(ownerIds: number[]): Promise<Map<number, LastOfferInfo>> {
+  if (ownerIds.length === 0) return new Map();
+  const result = await db.execute<{ id: number; offer_price: string | null; mail_date: string | null; offer_count: string }>(sql`
+    SELECT id, offer_price, mail_date, offer_count FROM (
+      SELECT
+        owner_id AS id,
+        offer_price,
+        mail_date,
+        count(*) OVER (PARTITION BY owner_id) AS offer_count,
+        row_number() OVER (PARTITION BY owner_id ORDER BY mail_date DESC NULLS LAST, id DESC) AS rn
+      FROM mailings
+      WHERE owner_id = ANY(${ownerIds})
+    ) sub
+    WHERE rn = 1
+  `);
+  const map = new Map<number, LastOfferInfo>();
+  for (const row of result.rows) {
+    map.set(Number(row.id), {
+      lastOfferPrice: row.offer_price,
+      lastOfferDate: row.mail_date,
+      offerCount: Number(row.offer_count),
+    });
+  }
+  return map;
+}
+
+// Never coerces a missing/null offer to 0 -- absence of mailings (or a
+// newest mailing with a null offer_price) both surface as null.
+function withLastOffer<T extends { id: number }>(row: T, map: Map<number, LastOfferInfo>) {
+  const info = map.get(row.id);
+  return {
+    ...row,
+    lastOfferPrice: info?.lastOfferPrice ?? null,
+    lastOfferDate: info?.lastOfferDate ?? null,
+    offerCount: info?.offerCount ?? 0,
+  };
+}
+
+// ============================================================
 // Global Search Route
 // ============================================================
 
@@ -217,7 +296,7 @@ router.get('/search', async (req, res) => {
     const propertyIds = propertyResults.map((p) => p.id);
     const ownerIds = ownerResults.map((o) => o.id);
 
-    const [propertyOwnerNames, ownerAddresses] = await Promise.all([
+    const [propertyOwnerNames, ownerAddresses, lastOfferByProperty, lastOfferByOwner] = await Promise.all([
       propertyIds.length > 0
         ? db.execute<{ property_id: number; owner_name: string }>(sql`
             SELECT DISTINCT ON (po.property_id) po.property_id, o.owner_name
@@ -235,17 +314,19 @@ router.get('/search', async (req, res) => {
             ORDER BY owner_id, id DESC
           `)
         : Promise.resolve({ rows: [] as { owner_id: number; city: string | null; state: string | null }[] }),
+      getLastOfferByProperty(propertyIds),
+      getLastOfferByOwner(ownerIds),
     ]);
 
     const ownerNameByPropertyId = new Map(propertyOwnerNames.rows.map((r) => [r.property_id, r.owner_name]));
     const addressByOwnerId = new Map(ownerAddresses.rows.map((r) => [r.owner_id, { city: r.city, state: r.state }]));
 
     const propertiesOut = propertyResults.map((p) => ({
-      ...p,
+      ...withLastOffer(p, lastOfferByProperty),
       ownerName: ownerNameByPropertyId.get(p.id) || null,
     }));
     const ownersOut = ownerResults.map((o) => ({
-      ...o,
+      ...withLastOffer(o, lastOfferByOwner),
       mailingCity: addressByOwnerId.get(o.id)?.city || null,
       mailingState: addressByOwnerId.get(o.id)?.state || null,
     }));
@@ -302,7 +383,10 @@ router.get('/properties', async (req, res) => {
       .limit(limit)
       .offset(offset);
 
-    res.json(successResponse(results, {
+    const lastOfferByProperty = await getLastOfferByProperty(results.map((p) => p.id));
+    const resultsWithOffers = results.map((p) => withLastOffer(p, lastOfferByProperty));
+
+    res.json(successResponse(resultsWithOffers, {
       pagination: {
         total,
         page,
@@ -340,7 +424,10 @@ router.get('/properties/search', async (req, res) => {
       )
       .limit(limit);
 
-    res.json(successResponse(results, { query: q }));
+    const lastOfferByProperty = await getLastOfferByProperty(results.map((p) => p.id));
+    const resultsWithOffers = results.map((p) => withLastOffer(p, lastOfferByProperty));
+
+    res.json(successResponse(resultsWithOffers, { query: q }));
   } catch (error) {
     console.error('Error searching properties:', error);
     res.status(500).json(errorResponse('Failed to search properties'));
@@ -380,7 +467,9 @@ router.get('/properties/:id', async (req, res) => {
       return res.status(404).json(errorResponse('Property not found', 404));
     }
 
-    res.json(successResponse(property));
+    const lastOfferByProperty = await getLastOfferByProperty([property.id]);
+
+    res.json(successResponse(withLastOffer(property, lastOfferByProperty)));
   } catch (error) {
     console.error('Error fetching property:', error);
     res.status(500).json(errorResponse('Failed to fetch property'));
@@ -535,7 +624,10 @@ router.get('/owners', async (req, res) => {
       filteredResults = results.filter(o => ownerIds.has(o.id));
     }
 
-    res.json(successResponse(filteredResults, {
+    const lastOfferByOwner = await getLastOfferByOwner(filteredResults.map((o) => o.id));
+    const resultsWithOffers = filteredResults.map((o) => withLastOffer(o, lastOfferByOwner));
+
+    res.json(successResponse(resultsWithOffers, {
       pagination: {
         total: state ? filteredResults.length : total,
         page,
@@ -573,7 +665,10 @@ router.get('/owners/search', async (req, res) => {
       )
       .limit(limit);
 
-    res.json(successResponse(results, { query: q }));
+    const lastOfferByOwner = await getLastOfferByOwner(results.map((o) => o.id));
+    const resultsWithOffers = results.map((o) => withLastOffer(o, lastOfferByOwner));
+
+    res.json(successResponse(resultsWithOffers, { query: q }));
   } catch (error) {
     console.error('Error searching owners:', error);
     res.status(500).json(errorResponse('Failed to search owners'));
@@ -620,7 +715,9 @@ router.get('/owners/:id', async (req, res) => {
       return res.status(404).json(errorResponse('Owner not found', 404));
     }
 
-    res.json(successResponse(owner));
+    const lastOfferByOwner = await getLastOfferByOwner([owner.id]);
+
+    res.json(successResponse(withLastOffer(owner, lastOfferByOwner)));
   } catch (error) {
     console.error('Error fetching owner:', error);
     res.status(500).json(errorResponse('Failed to fetch owner'));

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { Search, X, Loader2, MapPin, Users } from 'lucide-react';
 import { useGlobalSearch, GlobalSearchProperty, GlobalSearchOwner } from '../hooks/use-api.ts';
+import { formatCurrency } from '../lib/format.ts';
 
 const DEBOUNCE_MS = 275;
 const MIN_CHARS = 2;
@@ -160,7 +161,14 @@ export function GlobalSearch() {
                         active={highlightedIndex === idx}
                         onClick={() => handleSelect({ kind: 'property', item: p })}
                       >
-                        <span className="font-mono font-medium text-gray-900 truncate block">{p.apn}</span>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono font-medium text-gray-900 truncate">{p.apn}</span>
+                          {p.lastOfferPrice != null && (
+                            <span className="text-xs text-green-700 font-medium shrink-0">
+                              {formatCurrency(p.lastOfferPrice)}
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs text-gray-500 truncate">
                           {[p.county, p.state].filter(Boolean).join(', ') || 'No location on file'}
                           {p.ownerName && <span> · {p.ownerName}</span>}
@@ -179,7 +187,14 @@ export function GlobalSearch() {
                           active={highlightedIndex === flatIdx}
                           onClick={() => handleSelect({ kind: 'owner', item: o })}
                         >
-                          <span className="font-medium text-gray-900 truncate block">{o.ownerName}</span>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium text-gray-900 truncate">{o.ownerName}</span>
+                            {o.lastOfferPrice != null && (
+                              <span className="text-xs text-green-700 font-medium shrink-0">
+                                {formatCurrency(o.lastOfferPrice)}
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-gray-500 truncate capitalize">
                             {o.ownerType}
                             {(o.mailingCity || o.mailingState) && (
