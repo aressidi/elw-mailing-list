@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { eq, and, like, ilike, desc, asc, sql, count, isNull, not, or, gte, lte, inArray } from 'drizzle-orm';
+import { eq, and, ilike, desc, asc, sql, count, isNull, not, or, gte, lte, inArray } from 'drizzle-orm';
 import { db, pool } from './db.js';
 import {
   properties,
@@ -164,6 +164,112 @@ function getSuppressionOrderBy(sortBy: string, sortOrder: string) {
 }
 
 // ============================================================
+// Global Search Route
+// ============================================================
+
+// GET /api/search?q=&limit= - Universal search across properties and owners.
+// Matches properties by APN (formatting-tolerant), county, or zip; matches
+// owners by first/last/full name (including reversed "last first" order).
+router.get('/search', async (req, res) => {
+  try {
+    const qRaw = req.query.q;
+    const q = typeof qRaw === 'string' ? qRaw.trim() : '';
+    if (!q) {
+      return res.status(400).json(errorResponse('Search query "q" is required', 400));
+    }
+
+    const limitPerGroup = Math.min(25, Math.max(1, parseInt(req.query.limit as string) || 10));
+    const searchTerm = `%${q}%`;
+    // Strip non-alphanumerics from both the query and the stored APN before
+    // comparing, so "11501009009" and "115-01009009" match each other.
+    const normalizedApn = q.replace(/[^a-zA-Z0-9]/g, '');
+
+    const propertyConditions = [
+      ilike(properties.county, searchTerm),
+      ilike(properties.zip, searchTerm),
+    ];
+    if (normalizedApn) {
+      propertyConditions.push(
+        sql`regexp_replace(${properties.apn}, '[^a-zA-Z0-9]', '', 'g') ILIKE ${`%${normalizedApn}%`}`
+      );
+    }
+
+    const ownerFullNameForward = sql`concat_ws(' ', ${owners.firstName}, ${owners.lastName})`;
+    const ownerFullNameReversed = sql`concat_ws(' ', ${owners.lastName}, ${owners.firstName})`;
+    const ownerConditions = [
+      ilike(owners.firstName, searchTerm),
+      ilike(owners.lastName, searchTerm),
+      ilike(owners.ownerName, searchTerm),
+      ilike(ownerFullNameForward, searchTerm),
+      ilike(ownerFullNameReversed, searchTerm),
+    ];
+
+    const [propertyResults, propertyCountResult, ownerResults, ownerCountResult] = await Promise.all([
+      db.select().from(properties).where(or(...propertyConditions)).limit(limitPerGroup),
+      db.select({ count: count() }).from(properties).where(or(...propertyConditions)),
+      db.select().from(owners).where(or(...ownerConditions)).limit(limitPerGroup),
+      db.select({ count: count() }).from(owners).where(or(...ownerConditions)),
+    ]);
+
+    // Attach cheap disambiguation context: first associated owner name per
+    // matched property, and first mailing address (city/state) per matched
+    // owner. Each is a single batched query, not one query per row.
+    const propertyIds = propertyResults.map((p) => p.id);
+    const ownerIds = ownerResults.map((o) => o.id);
+
+    const [propertyOwnerNames, ownerAddresses] = await Promise.all([
+      propertyIds.length > 0
+        ? db.execute<{ property_id: number; owner_name: string }>(sql`
+            SELECT DISTINCT ON (po.property_id) po.property_id, o.owner_name
+            FROM property_owners po
+            JOIN owners o ON o.id = po.owner_id
+            WHERE po.property_id = ANY(${propertyIds})
+            ORDER BY po.property_id, o.id ASC
+          `)
+        : Promise.resolve({ rows: [] as { property_id: number; owner_name: string }[] }),
+      ownerIds.length > 0
+        ? db.execute<{ owner_id: number; city: string | null; state: string | null }>(sql`
+            SELECT DISTINCT ON (owner_id) owner_id, city, state
+            FROM mailing_addresses
+            WHERE owner_id = ANY(${ownerIds})
+            ORDER BY owner_id, id DESC
+          `)
+        : Promise.resolve({ rows: [] as { owner_id: number; city: string | null; state: string | null }[] }),
+    ]);
+
+    const ownerNameByPropertyId = new Map(propertyOwnerNames.rows.map((r) => [r.property_id, r.owner_name]));
+    const addressByOwnerId = new Map(ownerAddresses.rows.map((r) => [r.owner_id, { city: r.city, state: r.state }]));
+
+    const propertiesOut = propertyResults.map((p) => ({
+      ...p,
+      ownerName: ownerNameByPropertyId.get(p.id) || null,
+    }));
+    const ownersOut = ownerResults.map((o) => ({
+      ...o,
+      mailingCity: addressByOwnerId.get(o.id)?.city || null,
+      mailingState: addressByOwnerId.get(o.id)?.state || null,
+    }));
+
+    res.json(successResponse(
+      {
+        properties: propertiesOut,
+        owners: ownersOut,
+      },
+      {
+        query: q,
+        counts: {
+          properties: propertyCountResult[0]?.count || 0,
+          owners: ownerCountResult[0]?.count || 0,
+        },
+      }
+    ));
+  } catch (error) {
+    console.error('Error performing global search:', error);
+    res.status(500).json(errorResponse('Failed to perform search'));
+  }
+});
+
+// ============================================================
 // Properties Routes
 // ============================================================
 
@@ -227,9 +333,9 @@ router.get('/properties/search', async (req, res) => {
       .from(properties)
       .where(
         or(
-          like(properties.apn, searchTerm),
-          like(properties.county, searchTerm),
-          like(properties.zip, searchTerm)
+          ilike(properties.apn, searchTerm),
+          ilike(properties.county, searchTerm),
+          ilike(properties.zip, searchTerm)
         )
       )
       .limit(limit);
@@ -460,9 +566,9 @@ router.get('/owners/search', async (req, res) => {
       .from(owners)
       .where(
         or(
-          like(owners.firstName, searchTerm),
-          like(owners.lastName, searchTerm),
-          like(owners.ownerName, searchTerm)
+          ilike(owners.firstName, searchTerm),
+          ilike(owners.lastName, searchTerm),
+          ilike(owners.ownerName, searchTerm)
         )
       )
       .limit(limit);

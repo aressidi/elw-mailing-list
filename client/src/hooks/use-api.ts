@@ -104,6 +104,19 @@ export function useOwnerSearch(q: string, limit = 20) {
   });
 }
 
+// ─── Global Search ───────────────────────────────────────────
+export function useGlobalSearch(q: string, limit = 10) {
+  const trimmed = q.trim();
+  return useQuery({
+    queryKey: ['search', 'global', trimmed, limit],
+    queryFn: () =>
+      fetchJson<GlobalSearchResponse>(
+        `${API_BASE}/search?q=${encodeURIComponent(trimmed)}&limit=${limit}`
+      ),
+    enabled: trimmed.length >= 2,
+  });
+}
+
 // ─── Campaigns ───────────────────────────────────────────────
 export function useCampaigns(params?: { page?: number; limit?: number }) {
   const query = new URLSearchParams();
@@ -311,6 +324,25 @@ export interface Owner {
   ownerName: string;
   ownerType: 'individual' | 'company' | 'trust' | 'llc' | 'other';
   createdAt: string;
+}
+
+export interface GlobalSearchProperty extends Property {
+  ownerName: string | null;
+}
+
+export interface GlobalSearchOwner extends Owner {
+  mailingCity: string | null;
+  mailingState: string | null;
+}
+
+export interface GlobalSearchResponse {
+  success: boolean;
+  data: {
+    properties: GlobalSearchProperty[];
+    owners: GlobalSearchOwner[];
+  };
+  query: string;
+  counts: { properties: number; owners: number };
 }
 
 export interface MailingAddress {

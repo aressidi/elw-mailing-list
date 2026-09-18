@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { isAuthenticated, clearToken } from '../lib/auth.ts';
+import { GlobalSearch } from './GlobalSearch.tsx';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -49,7 +50,8 @@ export function Layout({ children }: LayoutProps) {
               </div>
               <h1 className="text-xl font-bold text-gray-900 hidden sm:block">ELW Mailing List</h1>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 ml-auto">
+              <GlobalSearch />
               <button
                 className="p-2 text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-100 md:hidden"
                 onClick={() => setMobileOpen(!mobileOpen)}
