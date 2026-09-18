@@ -33,6 +33,7 @@ export function OwnerDetail() {
   }
 
   const properties = owner.propertyOwners?.map((po) => po.property) || [];
+  const totalAcres = properties.reduce((sum, p) => sum + (parseFloat(p.acres || '') || 0), 0);
   const mailingAddresses = owner.mailingAddresses || [];
   const mailings = owner.mailings || [];
   const deals = owner.deals || [];
@@ -254,21 +255,27 @@ export function OwnerDetail() {
         </CardContent>
       </Card>
 
-      {/* Owned Properties */}
+      {/* Properties */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <MapPin className="w-5 h-5 text-gray-500" />
-            Owned Properties ({properties.length})
+            Properties ({properties.length})
           </CardTitle>
         </CardHeader>
         <CardContent className="p-4">
+          {properties.length > 0 && (
+            <p className="text-sm text-gray-500 mb-3">
+              {properties.length} propert{properties.length === 1 ? 'y' : 'ies'}
+              {totalAcres > 0 && <span> · {totalAcres.toFixed(2)} acres total</span>}
+            </p>
+          )}
           <DataTable
             data={properties}
             columns={propertyColumns}
             storageKey={`owner_${owner.id}_properties`}
             emptyIcon={<MapPin className="w-8 h-8" />}
-            emptyText="No properties owned"
+            emptyText="No properties linked to this owner"
           />
         </CardContent>
       </Card>

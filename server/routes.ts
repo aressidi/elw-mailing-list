@@ -243,6 +243,73 @@ function withLastOffer<T extends { id: number }>(row: T, map: Map<number, LastOf
 }
 
 // ============================================================
+// Owner <-> Property Association Helpers
+// ============================================================
+// Batched (one query per list request, keyed by the ids on the current
+// page) so the Owners/Properties list endpoints can show each other's
+// linked records without N+1 queries.
+
+interface PropertyPreview {
+  id: number;
+  apn: string;
+}
+
+interface OwnerPreview {
+  id: number;
+  ownerName: string;
+}
+
+const RELATED_RECORD_PREVIEW_LIMIT = 3;
+
+async function getPropertiesByOwner(
+  ownerIds: number[]
+): Promise<Map<number, { propertyCount: number; properties: PropertyPreview[] }>> {
+  if (ownerIds.length === 0) return new Map();
+  const result = await db.execute<{ owner_id: number; property_count: string; properties: PropertyPreview[] }>(sql`
+    SELECT po.owner_id,
+           count(*) AS property_count,
+           json_agg(json_build_object('id', p.id, 'apn', p.apn) ORDER BY p.id ASC) AS properties
+    FROM property_owners po
+    JOIN properties p ON p.id = po.property_id
+    WHERE po.owner_id = ANY(${ownerIds})
+    GROUP BY po.owner_id
+  `);
+  const map = new Map<number, { propertyCount: number; properties: PropertyPreview[] }>();
+  for (const row of result.rows) {
+    const all = Array.isArray(row.properties) ? row.properties : [];
+    map.set(Number(row.owner_id), {
+      propertyCount: Number(row.property_count),
+      properties: all.slice(0, RELATED_RECORD_PREVIEW_LIMIT),
+    });
+  }
+  return map;
+}
+
+async function getOwnersByProperty(
+  propertyIds: number[]
+): Promise<Map<number, { ownerCount: number; owners: OwnerPreview[] }>> {
+  if (propertyIds.length === 0) return new Map();
+  const result = await db.execute<{ property_id: number; owner_count: string; owners: OwnerPreview[] }>(sql`
+    SELECT po.property_id,
+           count(*) AS owner_count,
+           json_agg(json_build_object('id', o.id, 'ownerName', o.owner_name) ORDER BY o.id ASC) AS owners
+    FROM property_owners po
+    JOIN owners o ON o.id = po.owner_id
+    WHERE po.property_id = ANY(${propertyIds})
+    GROUP BY po.property_id
+  `);
+  const map = new Map<number, { ownerCount: number; owners: OwnerPreview[] }>();
+  for (const row of result.rows) {
+    const all = Array.isArray(row.owners) ? row.owners : [];
+    map.set(Number(row.property_id), {
+      ownerCount: Number(row.owner_count),
+      owners: all.slice(0, RELATED_RECORD_PREVIEW_LIMIT),
+    });
+  }
+  return map;
+}
+
+// ============================================================
 // Global Search Route
 // ============================================================
 
@@ -383,10 +450,21 @@ router.get('/properties', async (req, res) => {
       .limit(limit)
       .offset(offset);
 
-    const lastOfferByProperty = await getLastOfferByProperty(results.map((p) => p.id));
-    const resultsWithOffers = results.map((p) => withLastOffer(p, lastOfferByProperty));
+    const propertyIds = results.map((p) => p.id);
+    const [lastOfferByProperty, ownersByProperty] = await Promise.all([
+      getLastOfferByProperty(propertyIds),
+      getOwnersByProperty(propertyIds),
+    ]);
+    const resultsWithRelations = results.map((p) => {
+      const owners = ownersByProperty.get(p.id);
+      return {
+        ...withLastOffer(p, lastOfferByProperty),
+        ownerCount: owners?.ownerCount ?? 0,
+        owners: owners?.owners ?? [],
+      };
+    });
 
-    res.json(successResponse(resultsWithOffers, {
+    res.json(successResponse(resultsWithRelations, {
       pagination: {
         total,
         page,
@@ -624,10 +702,21 @@ router.get('/owners', async (req, res) => {
       filteredResults = results.filter(o => ownerIds.has(o.id));
     }
 
-    const lastOfferByOwner = await getLastOfferByOwner(filteredResults.map((o) => o.id));
-    const resultsWithOffers = filteredResults.map((o) => withLastOffer(o, lastOfferByOwner));
+    const ownerIdsForPage = filteredResults.map((o) => o.id);
+    const [lastOfferByOwner, propertiesByOwner] = await Promise.all([
+      getLastOfferByOwner(ownerIdsForPage),
+      getPropertiesByOwner(ownerIdsForPage),
+    ]);
+    const resultsWithRelations = filteredResults.map((o) => {
+      const properties = propertiesByOwner.get(o.id);
+      return {
+        ...withLastOffer(o, lastOfferByOwner),
+        propertyCount: properties?.propertyCount ?? 0,
+        properties: properties?.properties ?? [],
+      };
+    });
 
-    res.json(successResponse(resultsWithOffers, {
+    res.json(successResponse(resultsWithRelations, {
       pagination: {
         total: state ? filteredResults.length : total,
         page,

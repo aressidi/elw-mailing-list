@@ -126,6 +126,38 @@ export function Properties() {
       cell: (row) => (row.lastOfferPrice != null ? formatCurrency(row.lastOfferPrice) : '-'),
       comparator: (a, b) => (Number(a.lastOfferPrice) || 0) - (Number(b.lastOfferPrice) || 0),
     },
+    {
+      id: 'owners',
+      header: 'Owner',
+      accessorFn: (row) => row.ownerCount ?? row.owners?.length ?? 0,
+      enableFiltering: false,
+      cell: (row) => {
+        const owners = row.owners || [];
+        const total = row.ownerCount ?? owners.length;
+        if (total === 0) {
+          return <span className="text-gray-400 text-sm">No owner linked</span>;
+        }
+        const first = owners[0];
+        const remaining = total - 1;
+        return (
+          <div className="flex items-center gap-1.5">
+            {first && (
+              <Link href={`/owners/${first.id}`} onClick={(e) => e.stopPropagation()}>
+                <span className="text-blue-600 hover:underline text-sm truncate max-w-[10rem] inline-block">
+                  {first.ownerName}
+                </span>
+              </Link>
+            )}
+            {remaining > 0 && (
+              <Link href={`/properties/${row.id}`} onClick={(e) => e.stopPropagation()}>
+                <span className="text-xs text-gray-500 hover:underline shrink-0">+{remaining} more</span>
+              </Link>
+            )}
+          </div>
+        );
+      },
+      comparator: (a, b) => (a.ownerCount ?? 0) - (b.ownerCount ?? 0),
+    },
   ];
 
   return (

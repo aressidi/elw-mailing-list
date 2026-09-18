@@ -312,6 +312,20 @@ export interface LastOfferFields {
   offerCount: number;
 }
 
+// Lightweight cross-reference previews. Present (capped at 3 entries, with
+// the true total in the *Count field) on rows returned by the Properties
+// and Owners list endpoints; absent on rows nested under a detail response
+// (those already carry the full relation, e.g. PropertyDetail.propertyOwners).
+export interface RelatedPropertyPreview {
+  id: number;
+  apn: string;
+}
+
+export interface RelatedOwnerPreview {
+  id: number;
+  ownerName: string;
+}
+
 export interface Property extends LastOfferFields {
   id: number;
   apn: string;
@@ -325,6 +339,8 @@ export interface Property extends LastOfferFields {
   dataSourceId: number | null;
   sourceAcquiredDate: string | null;
   createdAt: string;
+  ownerCount?: number;
+  owners?: RelatedOwnerPreview[];
 }
 
 export interface Owner extends LastOfferFields {
@@ -333,7 +349,11 @@ export interface Owner extends LastOfferFields {
   lastName: string | null;
   ownerName: string;
   ownerType: 'individual' | 'company' | 'trust' | 'llc' | 'other';
+  phone: string | null;
+  email: string | null;
   createdAt: string;
+  propertyCount?: number;
+  properties?: RelatedPropertyPreview[];
 }
 
 export interface GlobalSearchProperty extends Property {
