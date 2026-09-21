@@ -905,6 +905,46 @@ router.post('/campaigns', async (req, res) => {
   }
 });
 
+// PATCH /api/campaigns/:id - Rename a campaign. Rejects a name that
+// normalizes (normalizeCampaignKey) to the same key as a DIFFERENT existing
+// campaign, so renames can't silently collide two campaigns together.
+router.patch('/campaigns/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json(errorResponse('Invalid campaign ID', 400));
+    }
+
+    const { name } = req.body;
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      return res.status(400).json(errorResponse('name is required', 400));
+    }
+    const trimmedName = name.trim();
+
+    const existing = await db.select().from(campaigns).where(eq(campaigns.id, id)).limit(1);
+    if (existing.length === 0) {
+      return res.status(404).json(errorResponse('Campaign not found', 404));
+    }
+
+    const key = normalizeCampaignKey(trimmedName);
+    const allCampaigns = await db.select({ id: campaigns.id, name: campaigns.name }).from(campaigns);
+    const conflict = allCampaigns.find((c) => c.id !== id && normalizeCampaignKey(c.name) === key);
+    if (conflict) {
+      return res.status(409).json(errorResponse('A different campaign with this name already exists', 409));
+    }
+
+    const result = await db.update(campaigns)
+      .set({ name: trimmedName })
+      .where(eq(campaigns.id, id))
+      .returning();
+
+    res.json(successResponse(result[0]));
+  } catch (error) {
+    console.error('Error updating campaign:', error);
+    res.status(500).json(errorResponse('Failed to update campaign'));
+  }
+});
+
 // ============================================================
 // Mailings Routes
 // ============================================================
@@ -1417,6 +1457,47 @@ router.post('/mailings/bulk', async (req, res) => {
   } catch (error) {
     console.error('Error bulk creating mailings:', error);
     res.status(500).json(errorResponse('Failed to bulk create mailings'));
+  }
+});
+
+// POST /api/mailings/move - Reassign a batch of mailings to a different
+// campaign (e.g. after a rename/merge cleanup). Capped at 2000 ids per call
+// to match the bulk-endpoint pattern of bounding single-request work.
+const MAX_MOVE_BATCH = 2000;
+
+router.post('/mailings/move', async (req, res) => {
+  try {
+    const { mailingIds, campaignId } = req.body;
+
+    if (!Array.isArray(mailingIds) || mailingIds.length === 0) {
+      return res.status(400).json(errorResponse('mailingIds array is required and must not be empty', 400));
+    }
+    if (mailingIds.length > MAX_MOVE_BATCH) {
+      return res.status(400).json(errorResponse(`mailingIds array must not exceed ${MAX_MOVE_BATCH} items`, 400));
+    }
+    if (!mailingIds.every((id: any) => Number.isInteger(id))) {
+      return res.status(400).json(errorResponse('mailingIds must be an array of integers', 400));
+    }
+
+    const campId = Number(campaignId);
+    if (!Number.isInteger(campId)) {
+      return res.status(400).json(errorResponse('campaignId must be an integer', 400));
+    }
+
+    const campaignExists = await db.select({ id: campaigns.id }).from(campaigns).where(eq(campaigns.id, campId)).limit(1);
+    if (campaignExists.length === 0) {
+      return res.status(404).json(errorResponse('Campaign not found', 404));
+    }
+
+    const result = await db.update(mailings)
+      .set({ campaignId: campId })
+      .where(inArray(mailings.id, mailingIds))
+      .returning({ id: mailings.id });
+
+    res.json(successResponse({ moved: result.length, campaignId: campId }));
+  } catch (error) {
+    console.error('Error moving mailings:', error);
+    res.status(500).json(errorResponse('Failed to move mailings'));
   }
 });
 
