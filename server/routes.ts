@@ -189,7 +189,7 @@ async function getLastOfferByProperty(propertyIds: number[]): Promise<Map<number
         count(*) OVER (PARTITION BY property_id) AS offer_count,
         row_number() OVER (PARTITION BY property_id ORDER BY mail_date DESC NULLS LAST, id DESC) AS rn
       FROM mailings
-      WHERE property_id = ANY(${propertyIds})
+      WHERE property_id IN ${propertyIds}
     ) sub
     WHERE rn = 1
   `);
@@ -215,7 +215,7 @@ async function getLastOfferByOwner(ownerIds: number[]): Promise<Map<number, Last
         count(*) OVER (PARTITION BY owner_id) AS offer_count,
         row_number() OVER (PARTITION BY owner_id ORDER BY mail_date DESC NULLS LAST, id DESC) AS rn
       FROM mailings
-      WHERE owner_id = ANY(${ownerIds})
+      WHERE owner_id IN ${ownerIds}
     ) sub
     WHERE rn = 1
   `);
@@ -271,7 +271,7 @@ async function getPropertiesByOwner(
            json_agg(json_build_object('id', p.id, 'apn', p.apn) ORDER BY p.id ASC) AS properties
     FROM property_owners po
     JOIN properties p ON p.id = po.property_id
-    WHERE po.owner_id = ANY(${ownerIds})
+    WHERE po.owner_id IN ${ownerIds}
     GROUP BY po.owner_id
   `);
   const map = new Map<number, { propertyCount: number; properties: PropertyPreview[] }>();
@@ -295,7 +295,7 @@ async function getOwnersByProperty(
            json_agg(json_build_object('id', o.id, 'ownerName', o.owner_name) ORDER BY o.id ASC) AS owners
     FROM property_owners po
     JOIN owners o ON o.id = po.owner_id
-    WHERE po.property_id = ANY(${propertyIds})
+    WHERE po.property_id IN ${propertyIds}
     GROUP BY po.property_id
   `);
   const map = new Map<number, { ownerCount: number; owners: OwnerPreview[] }>();
@@ -369,7 +369,7 @@ router.get('/search', async (req, res) => {
             SELECT DISTINCT ON (po.property_id) po.property_id, o.owner_name
             FROM property_owners po
             JOIN owners o ON o.id = po.owner_id
-            WHERE po.property_id = ANY(${propertyIds})
+            WHERE po.property_id IN ${propertyIds}
             ORDER BY po.property_id, o.id ASC
           `)
         : Promise.resolve({ rows: [] as { property_id: number; owner_name: string }[] }),
@@ -377,7 +377,7 @@ router.get('/search', async (req, res) => {
         ? db.execute<{ owner_id: number; city: string | null; state: string | null }>(sql`
             SELECT DISTINCT ON (owner_id) owner_id, city, state
             FROM mailing_addresses
-            WHERE owner_id = ANY(${ownerIds})
+            WHERE owner_id IN ${ownerIds}
             ORDER BY owner_id, id DESC
           `)
         : Promise.resolve({ rows: [] as { owner_id: number; city: string | null; state: string | null }[] }),
