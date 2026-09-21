@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
 import { useOwner, Mailing, Deal, Property } from '../hooks/use-api.ts';
-import { formatDate, formatCurrency } from '../lib/format.ts';
+import { formatDate, formatCurrency, formatNumber } from '../lib/format.ts';
 import { ArrowLeft, Users, MapPin, Send, TrendingUp, Ban, Loader2, Mail } from 'lucide-react';
 
 export function OwnerDetail() {
@@ -33,6 +33,7 @@ export function OwnerDetail() {
   }
 
   const properties = owner.propertyOwners?.map((po) => po.property) || [];
+  const totalAcres = properties.reduce((sum, p) => sum + (parseFloat(p.acres || '') || 0), 0);
   const mailingAddresses = owner.mailingAddresses || [];
   const mailings = owner.mailings || [];
   const deals = owner.deals || [];
@@ -189,7 +190,7 @@ export function OwnerDetail() {
       </div>
 
       {/* Owner Info */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <p className="text-sm text-gray-600">First Name</p>
@@ -206,6 +207,21 @@ export function OwnerDetail() {
           <CardContent className="p-4">
             <p className="text-sm text-gray-600">Type</p>
             <p className="text-lg font-bold text-gray-900 capitalize">{owner.ownerType}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm text-gray-600">Last Offer</p>
+            <p className="text-2xl font-bold text-gray-900">
+              {owner.lastOfferPrice != null ? formatCurrency(owner.lastOfferPrice) : '-'}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              {owner.offerCount > 0
+                ? `${formatNumber(owner.offerCount)} mailing${owner.offerCount === 1 ? '' : 's'}${
+                    owner.lastOfferDate ? ` · ${formatDate(owner.lastOfferDate)}` : ''
+                  }`
+                : 'No mailings'}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -239,21 +255,27 @@ export function OwnerDetail() {
         </CardContent>
       </Card>
 
-      {/* Owned Properties */}
+      {/* Properties */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <MapPin className="w-5 h-5 text-gray-500" />
-            Owned Properties ({properties.length})
+            Properties ({properties.length})
           </CardTitle>
         </CardHeader>
         <CardContent className="p-4">
+          {properties.length > 0 && (
+            <p className="text-sm text-gray-500 mb-3">
+              {properties.length} propert{properties.length === 1 ? 'y' : 'ies'}
+              {totalAcres > 0 && <span> · {totalAcres.toFixed(2)} acres total</span>}
+            </p>
+          )}
           <DataTable
             data={properties}
             columns={propertyColumns}
             storageKey={`owner_${owner.id}_properties`}
             emptyIcon={<MapPin className="w-8 h-8" />}
-            emptyText="No properties owned"
+            emptyText="No properties linked to this owner"
           />
         </CardContent>
       </Card>

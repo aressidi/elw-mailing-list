@@ -3,8 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
 import { useProperty, Mailing, Deal } from '../hooks/use-api.ts';
-import { formatAcreage, formatDate, formatCurrency } from '../lib/format.ts';
-import { ArrowLeft, MapPin, Users, Send, TrendingUp, Loader2 } from 'lucide-react';
+import { formatAcreage, formatDate, formatCurrency, formatNumber } from '../lib/format.ts';
+import { ArrowLeft, MapPin, Users, Send, TrendingUp, Loader2, Phone, Mail, UserX } from 'lucide-react';
 
 export function PropertyDetail() {
   const params = useParams<{ id: string }>();
@@ -133,7 +133,7 @@ export function PropertyDetail() {
       </div>
 
       {/* Property Info */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <p className="text-sm text-gray-600">Acres</p>
@@ -150,6 +150,21 @@ export function PropertyDetail() {
           <CardContent className="p-4">
             <p className="text-sm text-gray-600">Longitude</p>
             <p className="text-2xl font-bold text-gray-900">{property.longitude || '-'}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-sm text-gray-600">Last Offer</p>
+            <p className="text-2xl font-bold text-gray-900">
+              {property.lastOfferPrice != null ? formatCurrency(property.lastOfferPrice) : '-'}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              {property.offerCount > 0
+                ? `${formatNumber(property.offerCount)} mailing${property.offerCount === 1 ? '' : 's'}${
+                    property.lastOfferDate ? ` · ${formatDate(property.lastOfferDate)}` : ''
+                  }`
+                : 'No mailings'}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -171,35 +186,56 @@ export function PropertyDetail() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Users className="w-5 h-5 text-gray-500" />
-            Associated Owners ({owners.length})
+            Owners ({owners.length})
           </CardTitle>
         </CardHeader>
         <CardContent>
           {owners.length === 0 ? (
-            <p className="text-gray-500 py-4">No owners associated with this property</p>
+            <div className="flex flex-col items-center gap-2 py-8 text-gray-500">
+              <UserX className="w-8 h-8 text-gray-300" />
+              <p className="font-medium">No owner linked</p>
+              <p className="text-sm text-gray-400">This property has no associated owner on file.</p>
+            </div>
           ) : (
-            <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {owners.map((owner) => (
-                <div key={owner.id} className="flex items-start justify-between p-3 bg-gray-50 rounded-lg">
-                  <div>
+                <div key={owner.id} className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                  <div className="flex items-start justify-between gap-2">
                     <Link href={`/owners/${owner.id}`}>
                       <span className="font-medium text-blue-600 hover:underline">
                         {owner.ownerName}
                       </span>
                     </Link>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="secondary">{owner.ownerType}</Badge>
-                    </div>
+                    <Badge variant="secondary" className="capitalize shrink-0">{owner.ownerType}</Badge>
                   </div>
-                  <div className="text-right">
-                    {owner.mailingAddresses?.map((addr) => (
-                      <p key={addr.id} className="text-sm text-gray-500">
+                  {owner.mailingAddresses && owner.mailingAddresses.length > 0 ? (
+                    owner.mailingAddresses.map((addr) => (
+                      <p key={addr.id} className="text-sm text-gray-500 mt-1.5">
                         {addr.addressLine1}
                         {addr.city && `, ${addr.city}`}
                         {addr.state && `, ${addr.state}`}
+                        {addr.zip && ` ${addr.zip}`}
                       </p>
-                    ))}
-                  </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-gray-400 mt-1.5">No mailing address on file</p>
+                  )}
+                  {(owner.phone || owner.email) && (
+                    <div className="flex flex-col gap-1 mt-2 text-sm text-gray-600">
+                      {owner.phone && (
+                        <span className="flex items-center gap-1.5">
+                          <Phone className="w-3.5 h-3.5 text-gray-400" />
+                          {owner.phone}
+                        </span>
+                      )}
+                      {owner.email && (
+                        <span className="flex items-center gap-1.5">
+                          <Mail className="w-3.5 h-3.5 text-gray-400" />
+                          {owner.email}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

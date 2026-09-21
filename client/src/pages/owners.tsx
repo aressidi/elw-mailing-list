@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef, ColumnFilters } from '../components/ui/DataTable.tsx';
 import { useOwners, Owner } from '../hooks/use-api.ts';
-import { formatDate } from '../lib/format.ts';
+import { formatDate, formatCurrency } from '../lib/format.ts';
 import { Users, Loader2 } from 'lucide-react';
 
 // How long to wait after a column filter changes before hitting the server,
@@ -100,6 +100,43 @@ export function Owners() {
       accessorKey: 'lastName',
       filterType: 'text',
       cell: (row) => row.lastName || '-',
+    },
+    {
+      id: 'properties',
+      header: 'Properties',
+      accessorFn: (row) => row.propertyCount ?? row.properties?.length ?? 0,
+      enableFiltering: false,
+      cell: (row) => {
+        const properties = row.properties || [];
+        const total = row.propertyCount ?? properties.length;
+        if (total === 0) {
+          return <span className="text-gray-400 text-sm">No properties</span>;
+        }
+        return (
+          <div className="flex flex-wrap items-center gap-1">
+            {properties.map((p) => (
+              <Link key={p.id} href={`/properties/${p.id}`} onClick={(e) => e.stopPropagation()}>
+                <span className="font-mono text-xs text-blue-600 hover:underline bg-blue-50 px-1.5 py-0.5 rounded">
+                  {p.apn}
+                </span>
+              </Link>
+            ))}
+            {total > properties.length && (
+              <span className="text-xs text-gray-500">+{total - properties.length} more</span>
+            )}
+          </div>
+        );
+      },
+      comparator: (a, b) => (a.propertyCount ?? 0) - (b.propertyCount ?? 0),
+    },
+    {
+      id: 'lastOfferPrice',
+      header: 'Last Offer',
+      accessorKey: 'lastOfferPrice',
+      filterType: 'number',
+      align: 'right',
+      cell: (row) => (row.lastOfferPrice != null ? formatCurrency(row.lastOfferPrice) : '-'),
+      comparator: (a, b) => (Number(a.lastOfferPrice) || 0) - (Number(b.lastOfferPrice) || 0),
     },
     {
       id: 'createdAt',

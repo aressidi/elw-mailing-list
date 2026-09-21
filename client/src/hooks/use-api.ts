@@ -104,6 +104,19 @@ export function useOwnerSearch(q: string, limit = 20) {
   });
 }
 
+// ─── Global Search ───────────────────────────────────────────
+export function useGlobalSearch(q: string, limit = 10) {
+  const trimmed = q.trim();
+  return useQuery({
+    queryKey: ['search', 'global', trimmed, limit],
+    queryFn: () =>
+      fetchJson<GlobalSearchResponse>(
+        `${API_BASE}/search?q=${encodeURIComponent(trimmed)}&limit=${limit}`
+      ),
+    enabled: trimmed.length >= 2,
+  });
+}
+
 // ─── Campaigns ───────────────────────────────────────────────
 export function useCampaigns(params?: { page?: number; limit?: number }) {
   const query = new URLSearchParams();
@@ -289,7 +302,31 @@ export interface PaginatedResponse<T> {
   };
 }
 
-export interface Property {
+// Present on every returned/filtered property & owner row. lastOfferPrice
+// and lastOfferDate come from the mailing with the greatest mail_date (ties
+// broken by highest id); both are null when there are no mailings, or when
+// the newest mailing itself has a null offer_price -- never coerced to 0.
+export interface LastOfferFields {
+  lastOfferPrice: string | null;
+  lastOfferDate: string | null;
+  offerCount: number;
+}
+
+// Lightweight cross-reference previews. Present (capped at 3 entries, with
+// the true total in the *Count field) on rows returned by the Properties
+// and Owners list endpoints; absent on rows nested under a detail response
+// (those already carry the full relation, e.g. PropertyDetail.propertyOwners).
+export interface RelatedPropertyPreview {
+  id: number;
+  apn: string;
+}
+
+export interface RelatedOwnerPreview {
+  id: number;
+  ownerName: string;
+}
+
+export interface Property extends LastOfferFields {
   id: number;
   apn: string;
   state: string | null;
@@ -302,15 +339,40 @@ export interface Property {
   dataSourceId: number | null;
   sourceAcquiredDate: string | null;
   createdAt: string;
+  ownerCount?: number;
+  owners?: RelatedOwnerPreview[];
 }
 
-export interface Owner {
+export interface Owner extends LastOfferFields {
   id: number;
   firstName: string | null;
   lastName: string | null;
   ownerName: string;
   ownerType: 'individual' | 'company' | 'trust' | 'llc' | 'other';
+  phone: string | null;
+  email: string | null;
   createdAt: string;
+  propertyCount?: number;
+  properties?: RelatedPropertyPreview[];
+}
+
+export interface GlobalSearchProperty extends Property {
+  ownerName: string | null;
+}
+
+export interface GlobalSearchOwner extends Owner {
+  mailingCity: string | null;
+  mailingState: string | null;
+}
+
+export interface GlobalSearchResponse {
+  success: boolean;
+  data: {
+    properties: GlobalSearchProperty[];
+    owners: GlobalSearchOwner[];
+  };
+  query: string;
+  counts: { properties: number; owners: number };
 }
 
 export interface MailingAddress {
