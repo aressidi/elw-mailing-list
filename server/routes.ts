@@ -1244,12 +1244,23 @@ router.post('/mailings/bulk', async (req, res) => {
           return { propertyId: existing[0].id };
         }
 
+        const acres = item.acres !== undefined && item.acres !== null && item.acres !== ''
+          ? String(item.acres) : null;
+        const latitude = item.latitude !== undefined && item.latitude !== null && item.latitude !== ''
+          ? String(item.latitude) : null;
+        const longitude = item.longitude !== undefined && item.longitude !== null && item.longitude !== ''
+          ? String(item.longitude) : null;
+
         const createdProp = await db.insert(properties).values({
           apn,
           state: item.propertyState || null,
           county: item.propertyCounty || null,
           zip: item.propertyZip || null,
           rawData: item.propertyRawData,
+          legalDescription: item.legalDescription || null,
+          acres,
+          latitude,
+          longitude,
         }).returning();
         propertyIdByApn.set(apn, createdProp[0].id);
         return { propertyId: createdProp[0].id };
