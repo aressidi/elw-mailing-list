@@ -43,7 +43,7 @@ export function Dashboard() {
   const { data: statsData, isLoading: statsLoading } = useDashboardStats();
   const { data: stateStatsData, isLoading: stateLoading } = useMailingStatsByState();
   const { data: countyStatsData, isLoading: countyLoading } = useMailingStatsByCounty(
-    coverageState || undefined
+    coverageState.trim() || undefined
   );
   const { data: mailVolumeData, isLoading: mailVolumeLoading } = useMailVolumeByMonth();
 

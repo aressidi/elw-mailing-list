@@ -1829,7 +1829,7 @@ router.get('/mailings/by-state', async (req, res) => {
 // GET /api/mailings/by-county?state=X - Stats: count by county
 router.get('/mailings/by-county', async (req, res) => {
   try {
-    const { state } = req.query;
+    const state = typeof req.query.state === 'string' ? req.query.state.trim() : '';
 
     // Get mailings with property info
     const results = await db.query.mailings.findMany({
@@ -1838,10 +1838,13 @@ router.get('/mailings/by-county', async (req, res) => {
       },
     });
 
-    // Filter by state if provided
+    // Filter by state if provided (case-insensitive, whitespace-tolerant)
     let filteredResults = results;
     if (state) {
-      filteredResults = results.filter(m => m.property?.state === state);
+      const normalizedState = state.toLowerCase();
+      filteredResults = results.filter(
+        m => (m.property?.state ?? '').trim().toLowerCase() === normalizedState
+      );
     }
 
     // Calculate stats by county
