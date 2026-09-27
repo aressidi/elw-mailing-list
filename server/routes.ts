@@ -51,6 +51,13 @@ function errorResponse(error: string, statusCode: number = 500) {
   return { success: false, error, statusCode };
 }
 
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+function isNumericValue(v: unknown): boolean {
+  if (typeof v === 'number') return Number.isFinite(v);
+  return typeof v === 'string' && /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/.test(v);
+}
+
 // Helper to build orderBy for properties
 function getPropertyOrderBy(sortBy: string, sortOrder: string) {
   if (sortOrder === 'desc') {
@@ -1502,6 +1509,34 @@ router.post('/mailings/bulk', async (req, res) => {
       return res.status(400).json(errorResponse(`mailings array must not exceed ${MAX_BULK_BATCH} items`, 400));
     }
 
+    // Validate field formats up front so a malformed row rejects the whole
+    // batch with a 400 before anything is written (instead of a DB error
+    // mid-loop).
+    const validationErrors: { index: number; field: string; error: string }[] = [];
+    for (let i = 0; i < mailingsList.length; i++) {
+      const item = mailingsList[i];
+      if (!item || typeof item !== 'object') continue;
+      if (item.mailDate && Number.isNaN(new Date(item.mailDate).getTime())) {
+        validationErrors.push({ index: i, field: 'mailDate', error: `invalid date: ${JSON.stringify(item.mailDate)}` });
+      }
+      if (item.offerPrice !== undefined && item.offerPrice !== null && !isNumericValue(item.offerPrice)) {
+        validationErrors.push({ index: i, field: 'offerPrice', error: `invalid number: ${JSON.stringify(item.offerPrice)}` });
+      }
+      for (const field of ['acres', 'latitude', 'longitude'] as const) {
+        const v = item[field];
+        if (v !== undefined && v !== null && v !== '' && !isNumericValue(v)) {
+          validationErrors.push({ index: i, field, error: `invalid number: ${JSON.stringify(v)}` });
+        }
+      }
+    }
+    if (validationErrors.length > 0) {
+      const first = validationErrors[0];
+      return res.status(400).json({
+        ...errorResponse(`mailings[${first.index}].${first.field}: ${first.error}`, 400),
+        errors: validationErrors,
+      });
+    }
+
     // ---- Property cache (lazy: point lookups/creates by APN) ----
     const propertyIdByApn = new Map<string, number>();
     const verifiedPropertyIds = new Set<number>();
@@ -1553,12 +1588,12 @@ router.post('/mailings/bulk', async (req, res) => {
       fallbackCampaignId = id;
     }
 
-    async function resolvePropertyId(item: any): Promise<{ propertyId: number | null; error?: string }> {
+    async function resolvePropertyId(tx: DbTx, item: any): Promise<{ propertyId: number | null; error?: string }> {
       if (item.propertyId !== undefined && item.propertyId !== null) {
         const id = Number(item.propertyId);
         if (!Number.isInteger(id)) return { propertyId: null, error: 'propertyId must be an integer' };
         if (!verifiedPropertyIds.has(id)) {
-          const found = await db.select({ id: properties.id }).from(properties).where(eq(properties.id, id)).limit(1);
+          const found = await tx.select({ id: properties.id }).from(properties).where(eq(properties.id, id)).limit(1);
           if (found.length === 0) return { propertyId: null, error: `propertyId ${id} not found` };
           verifiedPropertyIds.add(id);
         }
@@ -1570,7 +1605,7 @@ router.post('/mailings/bulk', async (req, res) => {
         const cached = propertyIdByApn.get(apn);
         if (cached !== undefined) return { propertyId: cached };
 
-        const existing = await db.select({ id: properties.id }).from(properties).where(eq(properties.apn, apn)).limit(1);
+        const existing = await tx.select({ id: properties.id }).from(properties).where(eq(properties.apn, apn)).limit(1);
         if (existing.length > 0) {
           propertyIdByApn.set(apn, existing[0].id);
           return { propertyId: existing[0].id };
@@ -1583,7 +1618,7 @@ router.post('/mailings/bulk', async (req, res) => {
         const longitude = item.longitude !== undefined && item.longitude !== null && item.longitude !== ''
           ? String(item.longitude) : null;
 
-        const createdProp = await db.insert(properties).values({
+        const createdProp = await tx.insert(properties).values({
           apn,
           state: item.propertyState || null,
           county: item.propertyCounty || null,
@@ -1601,12 +1636,12 @@ router.post('/mailings/bulk', async (req, res) => {
       return { propertyId: null };
     }
 
-    async function resolveOwnerId(item: any): Promise<{ ownerId: number | null; mailingAddressId: number | null; error?: string }> {
+    async function resolveOwnerId(tx: DbTx, item: any): Promise<{ ownerId: number | null; mailingAddressId: number | null; error?: string }> {
       if (item.ownerId !== undefined && item.ownerId !== null) {
         const id = Number(item.ownerId);
         if (!Number.isInteger(id)) return { ownerId: null, mailingAddressId: null, error: 'ownerId must be an integer' };
         if (!verifiedOwnerIds.has(id)) {
-          const found = await db.select({ id: owners.id }).from(owners).where(eq(owners.id, id)).limit(1);
+          const found = await tx.select({ id: owners.id }).from(owners).where(eq(owners.id, id)).limit(1);
           if (found.length === 0) return { ownerId: null, mailingAddressId: null, error: `ownerId ${id} not found` };
           verifiedOwnerIds.add(id);
         }
@@ -1626,7 +1661,7 @@ router.post('/mailings/bulk', async (req, res) => {
 
         let ownerId = identityToOwnerId.get(identityKey);
         if (ownerId === undefined) {
-          const createdOwner = await db.insert(owners).values({
+          const createdOwner = await tx.insert(owners).values({
             ownerName,
             firstName: item.firstName || null,
             lastName: item.lastName || null,
@@ -1642,7 +1677,7 @@ router.post('/mailings/bulk', async (req, res) => {
         const addressKey = `${ownerId}|${identityKey}`;
         let mailingAddressId = ownerAddressId.get(addressKey) ?? null;
         if (!mailingAddressId && (address.line1 || address.city)) {
-          const addrResult = await db.insert(mailingAddresses).values({
+          const addrResult = await tx.insert(mailingAddresses).values({
             ownerId,
             addressLine1: address.line1,
             addressLine2: address.line2,
@@ -1660,12 +1695,12 @@ router.post('/mailings/bulk', async (req, res) => {
       return { ownerId: null, mailingAddressId: null };
     }
 
-    async function resolveCampaignId(item: any): Promise<{ campaignId: number | null; error?: string }> {
+    async function resolveCampaignId(tx: DbTx, item: any): Promise<{ campaignId: number | null; error?: string }> {
       if (item.campaignId !== undefined && item.campaignId !== null) {
         const id = Number(item.campaignId);
         if (!Number.isInteger(id)) return { campaignId: null, error: 'campaignId must be an integer' };
         if (!verifiedCampaignIds.has(id)) {
-          const found = await db.select({ id: campaigns.id }).from(campaigns).where(eq(campaigns.id, id)).limit(1);
+          const found = await tx.select({ id: campaigns.id }).from(campaigns).where(eq(campaigns.id, id)).limit(1);
           if (found.length === 0) return { campaignId: null, error: `campaignId ${id} not found` };
           verifiedCampaignIds.add(id);
         }
@@ -1677,7 +1712,7 @@ router.post('/mailings/bulk', async (req, res) => {
         const key = normalizeCampaignKey(name);
         let campId = campaignIdByKey.get(key);
         if (campId === undefined) {
-          const createdCampaign = await db.insert(campaigns).values({
+          const createdCampaign = await tx.insert(campaigns).values({
             name,
             link: item.campaignLink || null,
           }).returning();
@@ -1694,52 +1729,56 @@ router.post('/mailings/bulk', async (req, res) => {
     const errors: { index: number; error: string }[] = [];
     let created = 0;
 
-    for (let i = 0; i < mailingsList.length; i++) {
-      const item = mailingsList[i];
-      if (!item || typeof item !== 'object') {
-        errors.push({ index: i, error: 'mailing item must be an object' });
-        continue;
-      }
+    // All writes share one transaction: any thrown error rolls back the whole
+    // batch so a failed import leaves no partial rows behind.
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < mailingsList.length; i++) {
+        const item = mailingsList[i];
+        if (!item || typeof item !== 'object') {
+          errors.push({ index: i, error: 'mailing item must be an object' });
+          continue;
+        }
 
-      const propResult = await resolvePropertyId(item);
-      if (propResult.error) {
-        errors.push({ index: i, error: propResult.error });
-        continue;
-      }
+        const propResult = await resolvePropertyId(tx, item);
+        if (propResult.error) {
+          errors.push({ index: i, error: propResult.error });
+          continue;
+        }
 
-      const ownerResult = await resolveOwnerId(item);
-      if (ownerResult.error) {
-        errors.push({ index: i, error: ownerResult.error });
-        continue;
-      }
+        const ownerResult = await resolveOwnerId(tx, item);
+        if (ownerResult.error) {
+          errors.push({ index: i, error: ownerResult.error });
+          continue;
+        }
 
-      const campResult = await resolveCampaignId(item);
-      if (campResult.error) {
-        errors.push({ index: i, error: campResult.error });
-        continue;
-      }
+        const campResult = await resolveCampaignId(tx, item);
+        if (campResult.error) {
+          errors.push({ index: i, error: campResult.error });
+          continue;
+        }
 
-      if (propResult.propertyId && ownerResult.ownerId) {
-        await db.insert(propertyOwners).values({
+        if (propResult.propertyId && ownerResult.ownerId) {
+          await tx.insert(propertyOwners).values({
+            propertyId: propResult.propertyId,
+            ownerId: ownerResult.ownerId,
+          }).onConflictDoNothing();
+        }
+
+        const result = await tx.insert(mailings).values({
           propertyId: propResult.propertyId,
           ownerId: ownerResult.ownerId,
-        }).onConflictDoNothing();
-      }
+          mailingAddressId: ownerResult.mailingAddressId,
+          campaignId: campResult.campaignId,
+          mailDate: item.mailDate ? new Date(item.mailDate) : null,
+          offerPrice: item.offerPrice,
+        }).returning();
 
-      const result = await db.insert(mailings).values({
-        propertyId: propResult.propertyId,
-        ownerId: ownerResult.ownerId,
-        mailingAddressId: ownerResult.mailingAddressId,
-        campaignId: campResult.campaignId,
-        mailDate: item.mailDate ? new Date(item.mailDate) : null,
-        offerPrice: item.offerPrice,
-      }).returning();
-
-      if (result[0]) {
-        createdIds.push(result[0].id);
-        created++;
+        if (result[0]) {
+          createdIds.push(result[0].id);
+          created++;
+        }
       }
-    }
+    });
 
     res.status(201).json(successResponse({
       created,
