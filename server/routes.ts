@@ -676,7 +676,20 @@ router.get('/owners', async (req, res) => {
       conditions.push(ilike(owners.ownerName, `%${ownerName}%`));
     }
 
-    // For state filter, we need to check mailing addresses
+    // For state filter, we need to check mailing addresses. Applied in SQL so
+    // it runs before limit/offset and the total reflects the filtered set.
+    if (state) {
+      conditions.push(
+        inArray(
+          owners.id,
+          db
+            .select({ ownerId: mailingAddresses.ownerId })
+            .from(mailingAddresses)
+            .where(eq(mailingAddresses.state, state as string))
+        )
+      );
+    }
+
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     // Get total count
@@ -697,24 +710,12 @@ router.get('/owners', async (req, res) => {
 
     const results = await query;
 
-    // If state filter is provided, filter results after fetching
-    let filteredResults = results;
-    if (state) {
-      const ownersWithAddresses = await db
-        .select({ ownerId: mailingAddresses.ownerId })
-        .from(mailingAddresses)
-        .where(eq(mailingAddresses.state, state as string));
-      
-      const ownerIds = new Set(ownersWithAddresses.map(o => o.ownerId));
-      filteredResults = results.filter(o => ownerIds.has(o.id));
-    }
-
-    const ownerIdsForPage = filteredResults.map((o) => o.id);
+    const ownerIdsForPage = results.map((o) => o.id);
     const [lastOfferByOwner, propertiesByOwner] = await Promise.all([
       getLastOfferByOwner(ownerIdsForPage),
       getPropertiesByOwner(ownerIdsForPage),
     ]);
-    const resultsWithRelations = filteredResults.map((o) => {
+    const resultsWithRelations = results.map((o) => {
       const properties = propertiesByOwner.get(o.id);
       return {
         ...withLastOffer(o, lastOfferByOwner),
@@ -725,10 +726,10 @@ router.get('/owners', async (req, res) => {
 
     res.json(successResponse(resultsWithRelations, {
       pagination: {
-        total: state ? filteredResults.length : total,
+        total,
         page,
         limit,
-        totalPages: Math.ceil((state ? filteredResults.length : total) / limit),
+        totalPages: Math.ceil(total / limit),
       },
     }));
   } catch (error) {
@@ -1271,6 +1272,28 @@ router.get('/mailings', async (req, res) => {
       if (campaignId) conditions.push(eq(mailings.campaignId, parseInt(campaignId as string)));
       if (startDate) conditions.push(gte(mailings.mailDate, new Date(startDate as string)));
       if (endDate) conditions.push(lte(mailings.mailDate, new Date(endDate as string)));
+      // Match on mailing-address state or property state, in SQL so the filter
+      // runs before limit/offset and the total reflects the filtered set.
+      if (state) {
+        conditions.push(
+          or(
+            inArray(
+              mailings.mailingAddressId,
+              db
+                .select({ id: mailingAddresses.id })
+                .from(mailingAddresses)
+                .where(eq(mailingAddresses.state, state as string))
+            ),
+            inArray(
+              mailings.propertyId,
+              db
+                .select({ id: properties.id })
+                .from(properties)
+                .where(eq(properties.state, state as string))
+            )
+          )
+        );
+      }
 
       const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
@@ -1293,20 +1316,13 @@ router.get('/mailings', async (req, res) => {
         offset,
       });
 
-      let filteredResults = results;
-      if (state) {
-        filteredResults = results.filter(
-          (m) => m.mailingAddress?.state === state || m.property?.state === state
-        );
-      }
-
       return res.json(
-        successResponse(filteredResults, {
+        successResponse(results, {
           pagination: {
-            total: state ? filteredResults.length : total,
+            total,
             page,
             limit,
-            totalPages: Math.ceil((state ? filteredResults.length : total) / limit),
+            totalPages: Math.ceil(total / limit),
           },
         })
       );
