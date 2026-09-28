@@ -1182,11 +1182,13 @@ router.post('/campaigns', async (req, res) => {
 
     const trimmedName = name.trim();
 
-    // Check if a campaign with the same normalized name exists
+    // Check if a campaign with the same normalized name exists. Exact match on
+    // the normalizeCampaignKey form (not ILIKE), so '_' / '%' in names are
+    // literal characters rather than wildcards.
     const existing = await db
       .select()
       .from(campaigns)
-      .where(ilike(campaigns.name, trimmedName))
+      .where(sql`lower(btrim(regexp_replace(${campaigns.name}, '\\s+', ' ', 'g'))) = ${normalizeCampaignKey(trimmedName)}`)
       .limit(1);
 
     if (existing.length > 0) {
