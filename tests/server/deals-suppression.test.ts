@@ -114,7 +114,7 @@ describe('suppression', () => {
 
   describe('GET /api/suppression', () => {
     beforeEach(async () => {
-      await addSuppression({ ownerId, propertyId, reason: 'deceased' });
+      await addSuppression({ ownerId, propertyId, reason: 'do_not_mail' });
       await addSuppression({ ownerId, propertyId: otherPropertyId, reason: 'bad_address' });
     });
 
@@ -130,7 +130,7 @@ describe('suppression', () => {
     });
 
     it('filters by reason', async () => {
-      const res = await request(app).get('/api/suppression').query({ reason: 'deceased' });
+      const res = await request(app).get('/api/suppression').query({ reason: 'do_not_mail' });
       expect(res.body.data.map((s: any) => s.property.apn)).toEqual(['SUP-1']);
       expect(res.body.pagination.total).toBe(1);
     });
@@ -144,15 +144,21 @@ describe('suppression', () => {
       expect(res.body.data).toMatchObject({ ownerId, propertyId, reason: 'do_not_mail' });
     });
 
-    it.each(['do_not_mail', 'bad_address', 'deceased', 'sold', 'other'])('accepts reason %j', async (reason) => {
+    it.each(['do_not_mail', 'bad_address'])('accepts reason %j', async (reason) => {
       const res = await request(app).post('/api/suppression').send({ ownerId, propertyId, reason });
       expect(res.status).toBe(201);
       expect(res.body.data.reason).toBe(reason);
     });
 
+    it.each(['deceased', 'sold', 'other'])('rejects retired reason %j with 400', async (reason) => {
+      const res = await request(app).post('/api/suppression').send({ ownerId, propertyId, reason });
+      expect(res.status).toBe(400);
+      expect(await countRows('mailing_suppression')).toBe(0);
+    });
+
     it('refuses a duplicate owner+property suppression with 409', async () => {
       await request(app).post('/api/suppression').send({ ownerId, propertyId });
-      const res = await request(app).post('/api/suppression').send({ ownerId, propertyId, reason: 'sold' });
+      const res = await request(app).post('/api/suppression').send({ ownerId, propertyId, reason: 'bad_address' });
       expect(res.status).toBe(409);
       expect(res.body.success).toBe(false);
       expect(await countRows('mailing_suppression')).toBe(1);

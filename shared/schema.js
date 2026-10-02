@@ -4,7 +4,7 @@ import { createInsertSchema } from 'drizzle-zod';
 // Enums
 export const ownerTypeEnum = pgEnum('owner_type', ['individual', 'company', 'trust', 'llc', 'other']);
 export const hitTypeEnum = pgEnum('hit_type', ['call', 'email', 'website', 'text', 'mail', 'other']);
-export const suppressionReasonEnum = pgEnum('suppression_reason', ['do_not_mail', 'bad_address', 'deceased', 'sold', 'other']);
+export const suppressionReasonEnum = pgEnum('suppression_reason', ['do_not_mail', 'bad_address']);
 // ====================
 // Data Sources Table
 // ====================

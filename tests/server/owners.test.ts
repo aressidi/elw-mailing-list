@@ -154,7 +154,7 @@ describe('GET /api/owners/:id', () => {
     const c = await addCampaign({ name: 'Owner Detail Campaign' });
     await addMailing({ propertyId: p.id, ownerId: o.id, campaignId: c.id, mailDate: new Date('2026-04-01T12:00:00Z'), offerPrice: '1234.00' });
     await addDeal({ propertyId: p.id, ownerId: o.id, hitType: 'email' });
-    await addSuppression({ propertyId: p.id, ownerId: o.id, reason: 'deceased' });
+    await addSuppression({ propertyId: p.id, ownerId: o.id, reason: 'bad_address' });
   });
 
   it('returns the owner with properties, addresses, mailings, deals and suppressions', async () => {
@@ -167,7 +167,7 @@ describe('GET /api/owners/:id', () => {
     expect(d.mailings[0].campaign.name).toBe('Owner Detail Campaign');
     expect(d.mailings[0].property.apn).toBe('OWN-DETAIL-1');
     expect(d.deals[0]).toMatchObject({ hitType: 'email' });
-    expect(d.suppressions[0]).toMatchObject({ reason: 'deceased' });
+    expect(d.suppressions[0]).toMatchObject({ reason: 'bad_address' });
     expect(Number(d.lastOfferPrice)).toBe(1234);
     expect(d.offerCount).toBe(1);
   });

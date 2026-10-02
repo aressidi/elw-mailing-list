@@ -114,7 +114,7 @@ describe('use-api request URLs', () => {
     expect((await urlFor(() => useDealStats())).pathname).toBe('/api/deals/stats');
     expect((await urlFor(() => useDashboardStats())).pathname).toBe('/api/dashboard/stats');
     expect((await urlFor(() => useMailVolumeByMonth())).pathname).toBe('/api/dashboard/mail-volume-by-month');
-    expect(params(await urlFor(() => useSuppression({ reason: 'sold', page: 2 })))).toEqual({ page: '2', reason: 'sold' });
+    expect(params(await urlFor(() => useSuppression({ reason: 'bad_address', page: 2 })))).toEqual({ page: '2', reason: 'bad_address' });
   });
 });
 
@@ -196,7 +196,7 @@ describe('useAddSuppression', () => {
     const fetchMock = mockFetch({
       '/api/suppression': (_u, init) =>
         init?.method === 'POST'
-          ? { status: 201, body: { success: true, data: { id: 1, ownerId: 3, propertyId: 4, reason: 'sold' } } }
+          ? { status: 201, body: { success: true, data: { id: 1, ownerId: 3, propertyId: 4, reason: 'bad_address' } } }
           : { body: { success: true, data: [], pagination: { total: 0, page: 1, limit: 20, totalPages: 0 } } },
     });
     const { Wrapper } = createWrapper();
@@ -205,12 +205,12 @@ describe('useAddSuppression', () => {
     const listCallsBefore = fetchMock.mock.calls.filter(([, i]) => !i?.method || i.method === 'GET').length;
 
     await act(async () => {
-      await result.current.add.mutateAsync({ ownerId: 3, propertyId: 4, reason: 'sold' });
+      await result.current.add.mutateAsync({ ownerId: 3, propertyId: 4, reason: 'bad_address' });
     });
 
     const post = fetchMock.mock.calls.find(([, i]) => i?.method === 'POST')!;
     expect(String(post[0])).toBe('/api/suppression');
-    expect(JSON.parse(String(post[1]!.body))).toEqual({ ownerId: 3, propertyId: 4, reason: 'sold' });
+    expect(JSON.parse(String(post[1]!.body))).toEqual({ ownerId: 3, propertyId: 4, reason: 'bad_address' });
     expect((post[1]!.headers as Record<string, string>)['Content-Type']).toBe('application/json');
     await waitFor(() => {
       const listCallsAfter = fetchMock.mock.calls.filter(([, i]) => !i?.method || i.method === 'GET').length;

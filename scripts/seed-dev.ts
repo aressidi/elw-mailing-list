@@ -39,7 +39,7 @@ const CITIES = [
 ];
 
 const HIT_TYPES = ['call', 'email', 'website', 'text', 'mail', 'other'] as const;
-const SUPPRESSION_REASONS = ['do_not_mail', 'bad_address', 'deceased', 'sold', 'other'] as const;
+const SUPPRESSION_REASONS = ['do_not_mail', 'bad_address'] as const;
 const OWNER_TYPES = ['individual', 'company', 'trust', 'llc', 'other'] as const;
 
 // Deterministic PRNG so re-runs produce the same dataset.

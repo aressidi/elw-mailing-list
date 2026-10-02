@@ -459,7 +459,7 @@ export interface SuppressionRecord {
   id: number;
   ownerId: number | null;
   propertyId: number | null;
-  reason: 'do_not_mail' | 'bad_address' | 'deceased' | 'sold' | 'other';
+  reason: 'do_not_mail' | 'bad_address';
   createdAt: string;
   owner?: Owner | null;
   property?: Property | null;
