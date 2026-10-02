@@ -1,5 +1,5 @@
 import { pgTable, serial, varchar, text, integer, decimal, timestamp, boolean, jsonb, pgEnum, index, uniqueIndex, foreignKey, primaryKey } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { createInsertSchema } from 'drizzle-zod';
 import { z } from 'zod';
 
@@ -24,7 +24,7 @@ export const dataSources = pgTable('data_sources', {
 // ====================
 export const properties = pgTable('properties', {
   id: serial('id').primaryKey(),
-  apn: varchar('apn', { length: 100 }).notNull().unique(),
+  apn: varchar('apn', { length: 100 }).notNull(),
   state: varchar('state', { length: 2 }),
   county: varchar('county', { length: 100 }),
   zip: varchar('zip', { length: 20 }),
@@ -37,7 +37,14 @@ export const properties = pgTable('properties', {
   rawData: jsonb('raw_data'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
-  apnIdx: uniqueIndex('properties_apn_idx').on(table.apn),
+  apnIdx: index('properties_apn_idx').on(table.apn),
+  // An APN is unique within its county, not globally (see
+  // shared/property-location.ts, whose normalizeCounty this mirrors).
+  apnLocationIdx: uniqueIndex('properties_apn_location_idx').on(
+    table.apn,
+    sql`(coalesce(${table.state}, ''))`,
+    sql`(regexp_replace(regexp_replace(upper(coalesce(${table.county}, '')), '\\s+COUNTY$', ''), '[^A-Z]', '', 'g'))`,
+  ),
   stateIdx: index('properties_state_idx').on(table.state),
   countyIdx: index('properties_county_idx').on(table.county),
   zipIdx: index('properties_zip_idx').on(table.zip),

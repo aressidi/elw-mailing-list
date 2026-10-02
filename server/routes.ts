@@ -12,6 +12,7 @@ import {
   propertyOwners,
 } from '../shared/schema.js';
 import { ownerIdentityKey } from '../scripts/owner-identity.js';
+import { matchPropertyByLocation } from '../shared/property-location.js';
 
 const router = Router();
 
@@ -562,7 +563,8 @@ router.get('/properties/:id', async (req, res) => {
 });
 
 // POST /api/properties/bulk - Bulk upsert properties by APN. Existing rows
-// (matched by APN) have their provided fields updated in place instead of
+// (matched by APN within the item's state + county - an APN is only unique
+// within a county) have their provided fields updated in place instead of
 // being re-created; returns which APNs were skipped (i.e. already existed).
 router.post('/properties/bulk', async (req, res) => {
   try {
@@ -589,11 +591,16 @@ router.post('/properties/bulk', async (req, res) => {
         continue;
       }
 
-      const existing = await db
-        .select({ id: properties.id })
+      const candidates = await db
+        .select({ id: properties.id, state: properties.state, county: properties.county })
         .from(properties)
-        .where(eq(properties.apn, apn))
-        .limit(1);
+        .where(eq(properties.apn, apn));
+      const { match, ambiguous } = matchPropertyByLocation(candidates, { state: prop.state, county: prop.county });
+      if (ambiguous) {
+        errors.push({ index: i, error: `apn ${apn} exists in more than one county; state and county are required` });
+        continue;
+      }
+      const existing = match ? [match] : [];
 
       if (existing.length > 0) {
         skipped++;
@@ -1620,13 +1627,24 @@ router.post('/mailings/bulk', async (req, res) => {
 
       if (typeof item.apn === 'string' && item.apn.trim()) {
         const apn = item.apn.trim();
-        const cached = propertyIdByApn.get(apn);
+        // An APN is only unique within a county: match on the item's
+        // property state + county too.
+        const location = { state: item.propertyState || null, county: item.propertyCounty || null };
+        const cacheKey = `${apn}|${location.state ?? ''}|${location.county ?? ''}`;
+        const cached = propertyIdByApn.get(cacheKey);
         if (cached !== undefined) return { propertyId: cached };
 
-        const existing = await tx.select({ id: properties.id }).from(properties).where(eq(properties.apn, apn)).limit(1);
-        if (existing.length > 0) {
-          propertyIdByApn.set(apn, existing[0].id);
-          return { propertyId: existing[0].id };
+        const candidates = await tx
+          .select({ id: properties.id, state: properties.state, county: properties.county })
+          .from(properties)
+          .where(eq(properties.apn, apn));
+        const { match, ambiguous } = matchPropertyByLocation(candidates, location);
+        if (ambiguous) {
+          return { propertyId: null, error: `apn ${apn} exists in more than one county; propertyState and propertyCounty are required` };
+        }
+        if (match) {
+          propertyIdByApn.set(cacheKey, match.id);
+          return { propertyId: match.id };
         }
 
         const acres = item.acres !== undefined && item.acres !== null && item.acres !== ''
@@ -1647,7 +1665,7 @@ router.post('/mailings/bulk', async (req, res) => {
           latitude,
           longitude,
         }).returning();
-        propertyIdByApn.set(apn, createdProp[0].id);
+        propertyIdByApn.set(cacheKey, createdProp[0].id);
         return { propertyId: createdProp[0].id };
       }
 
