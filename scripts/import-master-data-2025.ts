@@ -17,11 +17,14 @@
 //   * Every source column is kept verbatim in properties.raw_data, so a
 //     column with no typed home in the schema is reported, not dropped.
 //
-// LOCAL DATABASE ONLY: the script refuses any non-localhost DATABASE_URL.
+// LOCAL DATABASE BY DEFAULT: the script refuses any non-localhost DATABASE_URL
+// unless --allow-remote is passed explicitly.
 //
 // Usage:
-//   npx tsx scripts/import-master-data-2025.ts [--dry-run] [--refresh] [--no-parents] [--repair-apns]
+//   npx tsx scripts/import-master-data-2025.ts [--dry-run] [--refresh] [--no-parents] [--repair-apns] [--allow-remote]
 //     --dry-run      run everything in the transaction, then roll back
+//     --allow-remote allow a non-local (e.g. production) DATABASE_URL; refuses
+//                    by default
 //     --refresh      ignore the on-disk sheet cache and re-fetch from Google
 //     --no-parents   skip parent-workbook supplementation and APN recovery
 //     --repair-apns  first fix properties an earlier run of this importer
@@ -60,6 +63,7 @@ const DRY_RUN = process.argv.includes('--dry-run');
 const REFRESH = process.argv.includes('--refresh');
 const NO_PARENTS = process.argv.includes('--no-parents');
 const REPAIR_APNS = process.argv.includes('--repair-apns');
+const ALLOW_REMOTE = process.argv.includes('--allow-remote');
 
 // Where each consolidated header lands in the schema. A header that is not
 // listed here is still preserved in properties.raw_data and is reported in
@@ -444,9 +448,14 @@ class DryRunRollback extends Error {}
 
 function assertLocalDatabase(url: string): void {
   const host = new URL(url).hostname;
-  if (!['localhost', '127.0.0.1', '::1', '[::1]', ''].includes(host)) {
-    throw new Error(`Refusing to run: DATABASE_URL host "${host}" is not local. This importer is local-only.`);
+  if (['localhost', '127.0.0.1', '::1', '[::1]', ''].includes(host)) return;
+  if (!ALLOW_REMOTE) {
+    throw new Error(`Refusing to run: DATABASE_URL host "${host}" is not local. This importer is local-only unless --allow-remote is passed.`);
   }
+  const banner = '!'.repeat(78);
+  console.warn(banner);
+  console.warn(`WARNING: --allow-remote set. Connecting to NON-LOCAL database host "${host}". This writes to a remote/production database.`);
+  console.warn(banner);
 }
 
 function inc(map: Map<string, number>, key: string, by = 1): void {
