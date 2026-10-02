@@ -6,6 +6,8 @@ import {
   dataSources, mailingSuppression, deals, sourceMetadata,
   ownerTypeEnum, hitTypeEnum, suppressionReasonEnum
 } from '../shared/schema';
+import { eq } from 'drizzle-orm';
+import { matchPropertyByLocation } from '../shared/property-location';
 import { normalizeCampaignName, cleanSheetLink, UNASSIGNED_CAMPAIGN_NAME } from './campaign-normalize';
 import { isSeedOwner, deleteSeedOwnerLinksForProperty } from './seed-owner-utils';
 
@@ -296,15 +298,18 @@ async function main() {
             sourceAcquiredDate: parseDate(row.mailingDate1) || new Date('2026-01-01'),
           };
 
-          const propertyResult = await db.insert(properties).values(propertyValues)
-            .onConflictDoUpdate({
-              target: properties.apn,
-              set: {
-                acres: propertyValues.acres,
-                legalDescription: propertyValues.legalDescription,
-              }
-            })
-            .returning();
+          // properties.apn is no longer unique on its own (unique on apn +
+          // state + county), so the former ON CONFLICT (apn) upsert is done
+          // by hand: same APN in the same place = same property.
+          const sameApn = await db.select({ id: properties.id, state: properties.state, county: properties.county })
+            .from(properties).where(eq(properties.apn, apn));
+          const existingProperty = matchPropertyByLocation(sameApn, propertyValues).match;
+          const propertyResult = existingProperty
+            ? await db.update(properties).set({
+              acres: propertyValues.acres,
+              legalDescription: propertyValues.legalDescription,
+            }).where(eq(properties.id, existingProperty.id)).returning()
+            : await db.insert(properties).values(propertyValues).returning();
           const propertyId = propertyResult[0].id;
           stats.properties++;
 

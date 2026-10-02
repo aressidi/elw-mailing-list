@@ -264,17 +264,47 @@ describe('POST /api/properties/bulk', () => {
   });
 
   it('upserts by APN: an existing APN is reported as skipped and its fields are updated in place', async () => {
-    const existing = await addProperty({ apn: 'DUP-1', state: 'NC', county: 'Old County' });
+    const existing = await addProperty({ apn: 'DUP-1', state: 'NC', county: 'Wake' });
     const res = await request(app).post('/api/properties/bulk').send({
-      properties: [{ apn: 'DUP-1', county: 'New County' }],
+      properties: [{ apn: 'DUP-1', county: 'Wake County', zip: '27601' }],
     });
     expect(res.status).toBe(201);
     expect(res.body.data).toMatchObject({ created: 0, skipped: 1, skippedApns: ['DUP-1'] });
     expect(await countRows('properties')).toBe(1);
 
     const detail = await request(app).get(`/api/properties/${existing.id}`);
-    expect(detail.body.data.county).toBe('New County');
+    expect(detail.body.data.county).toBe('Wake County');
+    expect(detail.body.data.zip).toBe('27601');
     expect(detail.body.data.state).toBe('NC'); // untouched field preserved
+  });
+
+  it('treats the same APN in another county as a different parcel', async () => {
+    await addProperty({ apn: '001-09955-000', state: 'AR', county: 'Washington' });
+    const res = await request(app).post('/api/properties/bulk').send({
+      properties: [
+        { apn: '001-09955-000', state: 'AR', county: 'JOHNSON COUNTY' },
+        { apn: '001-09955-000', state: 'TX', county: 'Washington' },
+      ],
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ created: 2, skipped: 0, errors: [] });
+    expect(await countRows('properties')).toBe(3);
+  });
+
+  it('rejects an APN with no location when that APN exists in more than one county', async () => {
+    await addProperty({ apn: 'SHARED-1', state: 'AR', county: 'Washington' });
+    await addProperty({ apn: 'SHARED-1', state: 'AR', county: 'Johnson' });
+    const res = await request(app).post('/api/properties/bulk').send({
+      properties: [{ apn: 'SHARED-1', acres: '5' }],
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ created: 0, skipped: 0 });
+    expect(res.body.data.errors).toEqual([{ index: 0, error: expect.stringContaining('more than one county') }]);
+  });
+
+  it('cannot store the same APN twice in one county, however the county is written', async () => {
+    await addProperty({ apn: 'ONE-1', state: 'AR', county: 'Benton' });
+    await expect(addProperty({ apn: 'ONE-1', state: 'AR', county: 'BENTON COUNTY' })).rejects.toThrow();
   });
 
   it('reports items without an APN per-index and still creates the rest', async () => {

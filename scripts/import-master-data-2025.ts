@@ -5,8 +5,13 @@
 //
 //   * Columns are located by HEADER NAME (row 1), never by index.
 //   * County/State come only from the row's own County/State cells.
-//   * An APN that already exists (in the DB or earlier in the sheet) reuses
-//     that property and only adds what is new (owner link, mailing, ...).
+//   * An APN that already exists IN THE SAME STATE + COUNTY (in the DB or
+//     earlier in the sheet) reuses that property and only adds what is new
+//     (owner link, mailing, ...). The same APN string in another county is a
+//     different parcel and gets its own property.
+//   * APNs the sheet damaged by storing them as numbers (dropped leading
+//     zeros, rounded digits) are recovered from the parent workbook - see
+//     scripts/apn-recovery.ts. The damaged value is kept in raw_data.
 //   * Parent workbooks (the row's Sheet Link) are indexed by APN across ALL
 //     of their tabs to backfill latitude/longitude and blank fields.
 //   * Every source column is kept verbatim in properties.raw_data, so a
@@ -15,10 +20,15 @@
 // LOCAL DATABASE ONLY: the script refuses any non-localhost DATABASE_URL.
 //
 // Usage:
-//   npx tsx scripts/import-master-data-2025.ts [--dry-run] [--refresh] [--no-parents]
-//     --dry-run     run everything in the transaction, then roll back
-//     --refresh     ignore the on-disk sheet cache and re-fetch from Google
-//     --no-parents  skip parent-workbook supplementation
+//   npx tsx scripts/import-master-data-2025.ts [--dry-run] [--refresh] [--no-parents] [--repair-apns]
+//     --dry-run      run everything in the transaction, then roll back
+//     --refresh      ignore the on-disk sheet cache and re-fetch from Google
+//     --no-parents   skip parent-workbook supplementation and APN recovery
+//     --repair-apns  first fix properties an earlier run of this importer
+//                    created under a damaged APN: renamed in place when all
+//                    of their rows share one true APN, otherwise deleted and
+//                    re-imported row by row (they were several parcels merged
+//                    into one)
 
 import fs from 'fs';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -27,11 +37,13 @@ import {
   properties, owners, propertyOwners, mailingAddresses, campaigns, mailings,
   dataSources, mailingSuppression, deals, sourceMetadata,
 } from '../shared/schema';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { normalizeCampaignName, cleanSheetLink } from './campaign-normalize';
 import { isSeedOwner, deleteSeedOwnerLinksForProperty } from './seed-owner-utils';
 import { normalizeIdentityName, ownerIdentityKey } from './owner-identity';
 import { GogSheetsCache, TabInfo } from './gog-sheets-cache';
+import { ApnRecoverer, ApnRecovery, APN_HEADER_ALIASES } from './apn-recovery';
+import { isDifferentLocation, matchPropertyByLocation } from '../shared/property-location';
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://localhost:5432/elw_mailing_list';
 const SHEET_ID = '1jVj15Gjr_vgq8pk-Dzvg2lx6BVdjKM7p6Jfhrae1yDM';
@@ -40,12 +52,14 @@ const DATA_SOURCE_NAME = 'consolidated_master_2025';
 const DATA_SOURCE_DESCRIPTION = 'Consolidated Master Mailing List 2025';
 const BATCH_SIZE = 500;
 const CACHE_DIR = process.env.IMPORT2025_CACHE_DIR || '/tmp/import2025_cache/sheets';
-const SUMMARY_PATH = '/tmp/import2025_summary.txt';
+// --summary=<path> keeps an earlier run's summary from being overwritten.
+const SUMMARY_PATH = process.argv.find((a) => a.startsWith('--summary='))?.slice('--summary='.length) || '/tmp/import2025_summary.txt';
 const RAW_KEY = 'consolidated_2025';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const REFRESH = process.argv.includes('--refresh');
 const NO_PARENTS = process.argv.includes('--no-parents');
+const REPAIR_APNS = process.argv.includes('--repair-apns');
 
 // Where each consolidated header lands in the schema. A header that is not
 // listed here is still preserved in properties.raw_data and is reported in
@@ -158,21 +172,6 @@ function apnMatchKey(v: any): string {
   return cellText(v).toUpperCase().replace(/\s+/g, ' ');
 }
 
-function normalizeCounty(county: string | null): string {
-  return (county ?? '').toUpperCase().replace(/\s+COUNTY$/, '').replace(/[^A-Z]/g, '');
-}
-
-// Two rows share an APN but sit in different places (properties.apn is
-// globally unique, so they cannot both exist). A prefix match is treated as
-// the same county because the sheet writes e.g. "Bentonville" for Benton.
-function isDifferentLocation(a: { state: string | null; county: string | null }, b: { state: string | null; county: string | null }): boolean {
-  if (a.state && b.state && a.state !== b.state) return true;
-  const ca = normalizeCounty(a.county);
-  const cb = normalizeCounty(b.county);
-  if (!ca || !cb) return false;
-  return !(ca.startsWith(cb) || cb.startsWith(ca));
-}
-
 function validLatLon(lat: number, lon: number): boolean {
   return Number.isFinite(lat) && Number.isFinite(lon) && lat >= 15 && lat <= 75 && lon >= -180 && lon <= -60;
 }
@@ -221,7 +220,7 @@ function parseFullAddress(full: string): ParsedAddress | null {
 type SuppField = 'legal' | 'situsAddress' | 'situsCity' | 'situsZip' | 'phone' | 'email' | 'acres';
 
 const PARENT_ALIASES: Record<'apn' | 'lat' | 'lon' | 'latlon' | SuppField, string[]> = {
-  apn: ['apn', 'parcel', 'parcel number', 'parcel id', 'parcel no', 'pin', 'apn formatted', 'apn unformatted', 'alternate apn', 'raw parcel number', 'parcel number pin', 'old parcel', 'aprdistacc'],
+  apn: APN_HEADER_ALIASES,
   lat: ['latitude', 'lat', 'lattitude'],
   lon: ['longitude', 'long', 'lng', 'lon'],
   latlon: ['lat long', 'lat lng', 'lat lon', 'latitude longitude', 'lattitude longitude', 'lat and long', 'latitude and longitude', 'coordinates', 'coords', 'geo', 'geolocation', 'gps', 'gps coordinates'],
@@ -490,6 +489,11 @@ async function main() {
     get: (header: string) => string;
     raw: Record<string, string>;
     apn: string;
+    // The APN as the consolidated tab holds it; differs from `apn` when the
+    // true APN was recovered from the parent workbook.
+    sheetApn: string;
+    recovery: ApnRecovery | null;
+    unformattedApn: any;
     apnKeys: string[];
     numericApn: string | null;
     docId: string | null;
@@ -499,7 +503,7 @@ async function main() {
 
   const sourceRows: SourceRow[] = [];
   let rowsNoApn = 0;
-  const noApnExamples: string[] = [];
+  const noApnRows: string[] = [];
   let apnFromUnformatted = 0;
   let precisionLostApns = 0;
   const apnCol = colIndex.get('APN')!;
@@ -538,13 +542,18 @@ async function main() {
 
     if (!apn) {
       rowsNoApn++;
-      if (noApnExamples.length < 10) noApnExamples.push(`row ${i + 1}: ${JSON.stringify(raw).slice(0, 160)}`);
+      // Nothing identifies the parcel: a seed/test row (the mail house's
+      // proof copy, which has no parcel) or a stray cell with no owner.
+      const reason = isSeedOwner(ownerName) ? 'seed/test row - no parcel behind it, the parent row has no APN either'
+        : !ownerName ? 'stray cells - no owner, no APN, no Sheet Link: nothing to look up in a parent workbook'
+          : 'no APN in the sheet';
+      noApnRows.push(`row ${i + 1}: ${reason} | ${JSON.stringify(raw).slice(0, 400)}`);
       continue;
     }
 
     const docMatch = get('Sheet Link').match(/\/spreadsheets\/d\/([^/]+)/);
     sourceRows.push({
-      sheetRow: i + 1, get, raw, apn,
+      sheetRow: i + 1, get, raw, apn, sheetApn: apn, recovery: null, unformattedApn,
       apnKeys: [...new Set([apnMatchKey(apn), apnMatchKey(formattedApn), typeof unformattedApn === 'number' ? String(unformattedApn) : ''].filter(Boolean))],
       numericApn: typeof unformattedApn === 'number' ? String(unformattedApn) : null,
       docId: docMatch ? docMatch[1] : null,
@@ -554,6 +563,42 @@ async function main() {
   }
   const rowsParsed = sourceRows.length + rowsNoApn;
   console.log(`Parsed ${rowsParsed} data rows (${rowsNoApn} without an APN)`);
+
+  // ========== APN RECOVERY ==========
+  // Done before anything is keyed by APN, so the whole import (property
+  // lookup, seed rule, parent supplement) runs on the true APN.
+  const recoveryCounts = new Map<string, number>();
+  const recoveryLog: string[] = [];
+  const unrecoveredNumeric = new Map<string, { n: number; examples: string[] }>();
+  if (!NO_PARENTS) {
+    console.log('Recovering damaged APNs from parent workbooks...');
+    const inputs = sourceRows.map((r) => ({
+      sheetRow: r.sheetRow, apn: r.apn, unformattedApn: r.unformattedApn, docId: r.docId,
+      ownerLastName: r.get('Owner Last Name'), ownerName: r.ownerName,
+      addressLine1: r.get('Mailing Address 1') || r.get('Full Mailing Address').split(/\r?\n/)[0],
+      acres: r.get('Acres'), offerPrice: r.get('Offer Price'),
+    }));
+    const recoverer = new ApnRecoverer(cache, inputs);
+    sourceRows.forEach((r, i) => {
+      if (r.isSeed) return;
+      const rec = recoverer.recover(inputs[i]);
+      r.recovery = rec;
+      inc(recoveryCounts, rec.status === 'recovered' ? `recovered - ${rec.how} (matched by ${rec.matchedBy})` : rec.status);
+      if (rec.status === 'recovered') {
+        recoveryLog.push(`row ${r.sheetRow}: ${r.raw['APN']}${r.sheetApn !== (r.raw['APN'] ?? '').toUpperCase() ? ` (= ${r.sheetApn})` : ''} -> ${rec.apn} | ${rec.how}, matched by ${rec.matchedBy} | ${r.get('State')}/${r.get('County')} | "${r.ownerName}" | parent ${rec.workbookId} [${rec.tab}] row ${rec.row} col "${rec.column}"`);
+        r.apn = rec.apn!;
+        r.apnKeys = [...new Set([apnMatchKey(r.apn), ...r.apnKeys])];
+      } else if (typeof r.unformattedApn === 'number' && rec.status !== 'confirmed') {
+        // A number-typed APN nothing could vouch for as text.
+        const key = `${r.get('State')}/${r.get('County')} - ${rec.status}`;
+        if (!unrecoveredNumeric.has(key)) unrecoveredNumeric.set(key, { n: 0, examples: [] });
+        const u = unrecoveredNumeric.get(key)!;
+        u.n++;
+        if (u.examples.length < 3) u.examples.push(`row ${r.sheetRow} ${r.apn}`);
+      }
+    });
+    console.log(`  ${recoveryLog.length} APNs recovered`);
+  }
 
   // ========== PARENT WORKBOOKS ==========
   const parents = new Map<string, ParentWorkbook>();
@@ -611,7 +656,10 @@ async function main() {
     sourceMetadata: 0,
     seedRowsSkipped: 0,
     seedOwnersReplaced: 0,
-    locationConflictRows: 0,
+    sharedApnProperties: 0,
+    repairRenamed: 0,
+    repairRebuilt: 0,
+    repairRebuiltInto: 0,
     countyStateBlank: 0,
     truncatedValues: 0,
     latLonFromConsolidatedText: 0,
@@ -629,7 +677,9 @@ async function main() {
   const hitTypeCounts = new Map<string, number>();
   const campaignMailings = new Map<string, number>();
   const campaignsCreatedNames = new Set<string>();
-  const locationConflicts: string[] = [];
+  const sharedApns: string[] = [];
+  const seedSkips: string[] = [];
+  const repairLog: string[] = [];
   const errorExamples: string[] = [];
   const rowStateCounty = new Map<string, number>();
   const parentMatchByDoc = new Map<string, { rows: number; matched: number; latLon: number }>();
@@ -678,14 +728,67 @@ async function main() {
         return id;
       }
 
+      // ========== REPAIR DAMAGED APNS FROM AN EARLIER RUN ==========
+      // A property this importer created is checked against the true APNs of
+      // the sheet rows recorded in its raw_data. Properties from any other
+      // source are never touched.
+      if (REPAIR_APNS) {
+        console.log('Repairing properties created under a damaged APN...');
+        const rowBySheetRow = new Map(sourceRows.map((r) => [r.sheetRow, r]));
+        const mine = await db.select({
+          id: properties.id, apn: properties.apn, state: properties.state, county: properties.county, rawData: properties.rawData,
+        }).from(properties).where(eq(properties.dataSourceId, dataSourceId));
+        const taken = new Set((await db.select({ apn: properties.apn, state: properties.state, county: properties.county }).from(properties))
+          .map((p) => `${p.apn.trim().toUpperCase()}|${p.state ?? ''}|${p.county ?? ''}`));
+        const purgeIds: number[] = [];
+        for (const p of mine) {
+          const sheetRows: number[] = ((p.rawData as any)?.[RAW_KEY]?.rows ?? []).map((r: any) => r.sheetRow);
+          const rows = sheetRows.map((n) => rowBySheetRow.get(n)).filter((r): r is SourceRow => !!r);
+          if (rows.length === 0) continue;
+          const stored = p.apn.trim().toUpperCase();
+          const trueApns = [...new Set(rows.map((r) => r.apn))];
+          if (trueApns.length === 1 && trueApns[0] === stored) continue;
+          const detail = `#${p.id} ${p.state}/${p.county} ${stored} -> ${trueApns.join(' | ')} (rows ${rows.map((r) => r.sheetRow).join(', ')})`;
+          const key = `${trueApns[0]}|${p.state ?? ''}|${p.county ?? ''}`;
+          if (trueApns.length === 1 && rows.length === sheetRows.length && !taken.has(key)) {
+            await db.update(properties).set({ apn: trueApns[0] }).where(eq(properties.id, p.id));
+            taken.add(key);
+            stats.repairRenamed++;
+            repairLog.push(`renamed  ${detail}`);
+          } else {
+            // Several parcels were merged into this property: its mailings
+            // and owner links cannot be told apart, so it is rebuilt from
+            // its rows by the import below.
+            purgeIds.push(p.id);
+            stats.repairRebuilt++;
+            stats.repairRebuiltInto += trueApns.length;
+            repairLog.push(`rebuilt  ${detail}`);
+          }
+        }
+        for (let i = 0; i < purgeIds.length; i += 500) {
+          const ids = purgeIds.slice(i, i + 500);
+          // mailings/deals are ON DELETE SET NULL; the rest cascades.
+          await db.delete(mailings).where(inArray(mailings.propertyId, ids));
+          await db.delete(deals).where(inArray(deals.propertyId, ids));
+          await db.delete(properties).where(inArray(properties.id, ids));
+        }
+        console.log(`  renamed ${stats.repairRenamed}, rebuilding ${stats.repairRebuilt} (into ${stats.repairRebuiltInto} parcels)`);
+      }
+
       console.log('Loading existing properties...');
       interface PropState { id: number; state: string | null; county: string | null; hasLatLon: boolean; origin: 'db' | 'run' }
-      const propByApn = new Map<string, PropState>();
+      // An APN is only unique within a county, so one APN can map to several
+      // properties; findProperty picks the one in the row's state + county.
+      const propsByApn = new Map<string, PropState[]>();
+      const findProperty = (apn: string, location: { state: string | null; county: string | null }): PropState | undefined =>
+        matchPropertyByLocation(propsByApn.get(apn) ?? [], location).match ?? undefined;
       const existingProps = await db.select({
         id: properties.id, apn: properties.apn, state: properties.state, county: properties.county, latitude: properties.latitude,
       }).from(properties);
       for (const p of existingProps) {
-        propByApn.set(p.apn.trim().toUpperCase(), { id: p.id, state: p.state, county: p.county, hasLatLon: p.latitude !== null, origin: 'db' });
+        const key = p.apn.trim().toUpperCase();
+        if (!propsByApn.has(key)) propsByApn.set(key, []);
+        propsByApn.get(key)!.push({ id: p.id, state: p.state, county: p.county, hasLatLon: p.latitude !== null, origin: 'db' });
       }
       console.log(`Found ${existingProps.length} existing properties`);
 
@@ -756,8 +859,10 @@ async function main() {
 
       // A seed/test row never displaces or joins a real owner: it is only
       // imported when nothing real claims that APN, in the sheet or the DB.
+      // (Compared on the APN as the sheet holds it: a seed row copies the
+      // real row's cell, damaged or not.)
       const apnsWithRealOwner = new Set<string>();
-      for (const r of sourceRows) if (!r.isSeed) apnsWithRealOwner.add(r.apn);
+      for (const r of sourceRows) if (!r.isSeed) apnsWithRealOwner.add(r.sheetApn);
 
       const touched = new Map<number, { rows: any[]; parent: any; latLonSource: string | null }>();
 
@@ -777,18 +882,20 @@ async function main() {
             inc(rowStateCounty, `${state ?? '(blank)'}|${county ?? '(blank)'}`);
             if (!state || !county) stats.countyStateBlank++;
 
-            if (row.isSeed && (apnsWithRealOwner.has(apn) || propByApn.get(apn)?.origin === 'db')) {
+            const existing = findProperty(apn, { state, county });
+            if (row.isSeed && (apnsWithRealOwner.has(row.sheetApn) || existing?.origin === 'db')) {
               stats.seedRowsSkipped++;
+              seedSkips.push(`row ${row.sheetRow}: "${row.ownerName}" on APN ${apn} (${state}/${county})`);
               await db.execute(sql`RELEASE SAVEPOINT import_row`);
               continue;
             }
 
-            const existing = propByApn.get(apn);
-            if (existing && isDifferentLocation(existing, { state, county })) {
-              stats.locationConflictRows++;
-              locationConflicts.push(`row ${row.sheetRow}: APN ${apn} is ${state}/${county} in the sheet but property #${existing.id} (${existing.origin === 'db' ? 'already in DB' : 'earlier sheet row'}) is ${existing.state}/${existing.county} | owner "${row.ownerName}" | ${normalizeCampaignName(row.get('Sheet Name'))}`);
-              await db.execute(sql`RELEASE SAVEPOINT import_row`);
-              continue;
+            // The same APN string in another county/state is a different
+            // parcel: it gets its own property (unique on apn + state + county).
+            const elsewhere = existing ? [] : (propsByApn.get(apn) ?? []).filter((p) => isDifferentLocation(p, { state, county }));
+            if (elsewhere.length > 0) {
+              stats.sharedApnProperties++;
+              sharedApns.push(`row ${row.sheetRow}: APN ${apn} in ${state}/${county} is a separate parcel from ${elsewhere.map((p) => `#${p.id} ${p.state}/${p.county}`).join(', ')} | owner "${row.ownerName}" | ${normalizeCampaignName(row.get('Sheet Name'))}`);
             }
 
             // ========== PARENT SUPPLEMENT ==========
@@ -878,7 +985,8 @@ async function main() {
               }).returning();
               propertyId = propertyResult[0].id;
               prop = { id: propertyId, state, county, hasLatLon: latLon !== null, origin: 'run' };
-              propByApn.set(apn, prop);
+              if (!propsByApn.has(apn)) propsByApn.set(apn, []);
+              propsByApn.get(apn)!.push(prop);
               stats.propertiesCreated++;
             }
             if (latLonSource) {
@@ -891,7 +999,14 @@ async function main() {
             const t = touched.get(propertyId)!;
             if (existing?.origin === 'db' && t.rows.length === 0) stats.propertiesReusedDb++;
             if (existing?.origin === 'run' && t.rows.length === 1) stats.propertiesReusedSheet++;
-            t.rows.push({ sheetRow: row.sheetRow, ...(apn !== (row.raw['APN'] ?? '').toUpperCase() ? { apnResolved: apn } : {}), ...row.raw });
+            // row.raw keeps the APN cell exactly as the sheet shows it.
+            const rec = row.recovery?.status === 'recovered' ? row.recovery : null;
+            t.rows.push({
+              sheetRow: row.sheetRow,
+              ...(apn !== (row.raw['APN'] ?? '').toUpperCase() ? { apnResolved: apn } : {}),
+              ...(rec ? { apnRecovery: { sheetValue: row.sheetApn, recovered: rec.apn, how: rec.how, matchedBy: rec.matchedBy, workbookId: rec.workbookId, workbook: rec.workbook, tab: rec.tab, row: rec.row, column: rec.column } } : {}),
+              ...row.raw,
+            });
             if (latLonSource) t.latLonSource = latLonSource;
             if (parent && (Object.keys(supplied).length > 0 || latLonSource?.startsWith('parent') || parent.parentApn)) {
               t.parent = { workbookId: row.docId, workbook: wb!.title, tab: parent.tab, ...(parent.parentApn ? { parentApn: parent.parentApn } : {}), supplied: { ...(t.parent?.supplied ?? {}), ...supplied } };
@@ -1163,10 +1278,9 @@ async function main() {
       L.push('');
       L.push('== ROWS ==');
       L.push(`Data rows parsed (non-empty):            ${rowsParsed}`);
-      L.push(`  imported:                              ${rowsParsed - rowsNoApn - stats.seedRowsSkipped - stats.locationConflictRows - stats.errors}`);
-      L.push(`  skipped - no APN:                      ${rowsNoApn}`);
+      L.push(`  imported:                              ${rowsParsed - rowsNoApn - stats.seedRowsSkipped - stats.errors}`);
+      L.push(`  skipped - no APN:                      ${rowsNoApn}  (see NOT IMPORTED)`);
       L.push(`  skipped - seed/test owner row:         ${stats.seedRowsSkipped}  (Alex Ressi / Rocket Print rows on an APN a real owner holds)`);
-      L.push(`  skipped - APN collides across counties:${String(stats.locationConflictRows).padStart(3)}  (see BLOCKERS)`);
       L.push(`  errors:                                ${stats.errors}`);
       L.push('');
       L.push('== PROPERTIES ==');
@@ -1175,7 +1289,25 @@ async function main() {
       L.push(`Reused - APN repeated within the sheet:  ${stats.propertiesReusedSheet} properties (${stats.rowsOnReusedSheetProperty} extra rows)`);
       L.push(`Distinct properties touched:             ${touched.size}`);
       L.push(`APNs restored from unformatted values:   ${apnFromUnformatted}  (number-formatted cells, e.g. 290280136.1 -> 290280136.11)`);
-      L.push(`APNs with digits lost in the source:     ${precisionLostApns}  (sci-notation cells like 1.30E+11 -> 130201000000; real APN not recoverable from the tab)`);
+      L.push(`APNs with digits lost in the source:     ${precisionLostApns}  (sci-notation cells like 1.30E+11 -> 130201000000; real APN not recoverable from the tab - see APN RECOVERY)`);
+      L.push(`Same APN, different county -> own property: ${stats.sharedApnProperties}  (see SHARED APNS)`);
+      L.push('');
+      L.push('== APN RECOVERY (from parent workbooks) ==');
+      L.push(`APNs recovered: ${recoveryLog.length}  (the damaged sheet value is kept in raw_data.${RAW_KEY}.rows[].apnRecovery)`);
+      for (const [k, n] of [...recoveryCounts].sort((a, b) => b[1] - a[1])) L.push(`  ${String(n).padStart(5)}  ${k}`);
+      L.push('  recovered     = the parent holds a different, numerically consistent APN on the row with the same owner (+ address)');
+      L.push('  confirmed     = the parent holds the same APN as text');
+      L.push('  parent_numeric= the parent holds the same value as a NUMBER too, so nothing better exists to recover');
+      L.push('  no_parent_row = no parent row with this owner; no_parent_link = the row has no Sheet Link');
+      const unrecoveredTotal = [...unrecoveredNumeric.values()].reduce((s, u) => s + u.n, 0);
+      L.push(`Number-typed APNs no parent text could vouch for: ${unrecoveredTotal}  (imported with the sheet's value; leading zeros / trailing digits may be missing)`);
+      for (const [k, u] of [...unrecoveredNumeric].sort((a, b) => b[1].n - a[1].n)) L.push(`  ${String(u.n).padStart(5)}  ${k}  e.g. ${u.examples.join(', ')}`);
+      if (REPAIR_APNS) {
+        L.push('');
+        L.push('== REPAIR OF EARLIER-RUN PROPERTIES (--repair-apns) ==');
+        L.push(`Renamed in place (all rows share one true APN):       ${stats.repairRenamed}`);
+        L.push(`Rebuilt (several parcels had been merged into one):   ${stats.repairRebuilt} properties -> ${stats.repairRebuiltInto} parcels`);
+      }
       L.push('');
       L.push('== OWNERS / ADDRESSES ==');
       L.push(`Owners created:                          ${stats.owners}`);
@@ -1255,18 +1387,24 @@ async function main() {
       L.push(`Cells beyond the header row (trailing columns): ${[...filledByHeader.keys()].filter((k) => k.startsWith('(column')).map((k) => `${k} ${filledByHeader.get(k)}`).join(', ') || 'none'}`);
       L.push(`Spreadsheet error cells treated as blank: ${[...sheetErrorCells].map(([h, n]) => `${h} ${n}`).join(', ') || 'none'}`);
       L.push('');
-      L.push('== BLOCKERS / NEEDS A DECISION ==');
-      L.push(`APN collides across different counties/states: ${stats.locationConflictRows} rows NOT imported.`);
-      L.push('  properties.apn is globally unique, so two different parcels that share an APN string cannot both exist.');
-      L.push('  Importing them would attach the mailing to the wrong parcel; fixing it needs a schema change (unique on state+county+apn), which was out of scope.');
-      for (const c of locationConflicts) L.push(`  - ${c}`);
-      if (rowsNoApn > 0) {
-        L.push(`Rows with no APN (not importable): ${rowsNoApn}`);
-        for (const e of noApnExamples) L.push(`  - ${e}`);
-      }
-      if (errorExamples.length > 0) {
-        L.push(`Row errors: ${stats.errors}`);
-        for (const e of errorExamples) L.push(`  - ${e}`);
+      L.push('== SHARED APNS (same APN string, different county/state = different parcel) ==');
+      L.push(`${stats.sharedApnProperties} properties created alongside a same-APN property elsewhere (properties are unique on apn + state + county).`);
+      for (const c of sharedApns) L.push(`  - ${c}`);
+      L.push('');
+      L.push('== NOT IMPORTED ==');
+      L.push(`Rows with no APN: ${rowsNoApn}`);
+      for (const e of noApnRows) L.push(`  - ${e}`);
+      L.push(`Seed/test rows on an APN a real owner holds (intentional): ${stats.seedRowsSkipped}`);
+      for (const e of seedSkips) L.push(`  - ${e}`);
+      L.push(`Row errors: ${stats.errors}`);
+      for (const e of errorExamples) L.push(`  - ${e}`);
+      L.push('');
+      L.push('== APN RECOVERY LOG (sheet row: sheet value -> recovered APN | how | where | owner | parent workbook [tab] row) ==');
+      for (const e of recoveryLog) L.push(`  ${e}`);
+      if (repairLog.length > 0) {
+        L.push('');
+        L.push('== REPAIR LOG ==');
+        for (const e of repairLog) L.push(`  ${e}`);
       }
       L.push('');
       L.push('== LOCAL DB TOTALS AFTER IMPORT ==');

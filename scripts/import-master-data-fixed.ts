@@ -8,6 +8,7 @@ import { eq, sql } from 'drizzle-orm';
 import { normalizeCampaignName, cleanSheetLink, UNASSIGNED_CAMPAIGN_NAME } from './campaign-normalize';
 import { isSeedOwner, deleteSeedOwnerLinksForProperty } from './seed-owner-utils';
 import { normalizeIdentityName, ownerIdentityKey } from './owner-identity';
+import { matchPropertyByLocation } from '../shared/property-location';
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://localhost:5432/elw_mailing_list';
 const SHEET_ID = '1SrqwoqPlxmceae5y7DylTvUkVOXjyb58dsjDY3KQ7zA';
@@ -297,21 +298,27 @@ async function main() {
           }
 
           // ========== PROPERTY ==========
-          const propertyResult = await db.insert(properties).values({
-            apn: apn,
-            state: row.state?.trim().toUpperCase() || null,
-            county: row.county?.trim() || null,
-            acres: parseAcres(row.acres),
-            legalDescription: row.legalDescription?.trim() || null,
-            dataSourceId: dataSourceId,
-            sourceAcquiredDate: parseDate(row.mailingDate1) || new Date('2026-01-01'),
-          }).onConflictDoUpdate({
-            target: properties.apn,
-            set: {
+          // properties.apn is no longer unique on its own (unique on apn +
+          // state + county), so the former ON CONFLICT (apn) upsert is done
+          // by hand: same APN in the same place = same property.
+          const rowLocation = { state: row.state?.trim().toUpperCase() || null, county: row.county?.trim() || null };
+          const sameApn = await db.select({ id: properties.id, state: properties.state, county: properties.county })
+            .from(properties).where(eq(properties.apn, apn));
+          const existingProperty = matchPropertyByLocation(sameApn, rowLocation).match;
+          const propertyResult = existingProperty
+            ? await db.update(properties).set({
               acres: parseAcres(row.acres),
               legalDescription: row.legalDescription?.trim() || null,
-            }
-          }).returning();
+            }).where(eq(properties.id, existingProperty.id)).returning()
+            : await db.insert(properties).values({
+              apn: apn,
+              state: rowLocation.state,
+              county: rowLocation.county,
+              acres: parseAcres(row.acres),
+              legalDescription: row.legalDescription?.trim() || null,
+              dataSourceId: dataSourceId,
+              sourceAcquiredDate: parseDate(row.mailingDate1) || new Date('2026-01-01'),
+            }).returning();
           const propertyId = propertyResult[0].id;
           stats.properties++;
 

@@ -148,6 +148,24 @@ describe('POST /api/mailings/bulk', () => {
     campaignName: 'Bulk Campaign', mailDate: '2026-05-05T12:00:00Z', offerPrice: '12500.00',
   };
 
+  it('resolves an APN within its county: the same APN elsewhere is a different property', async () => {
+    const washington = await addProperty({ apn: 'BULK-1', state: 'AR', county: 'Washington' });
+    const res = await request(app).post('/api/mailings/bulk').send({
+      mailings: [item, { ...item, propertyState: 'AR', propertyCounty: 'Washington County' }],
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ created: 2, errors: [] });
+
+    const { rows } = await pool.query(
+      `SELECT p.id, p.state, p.county FROM mailings m JOIN properties p ON p.id = m.property_id ORDER BY p.state`
+    );
+    expect(rows).toEqual([
+      { id: washington.id, state: 'AR', county: 'Washington' },
+      { id: expect.any(Number), state: 'NC', county: 'Wake' },
+    ]);
+    expect(rows[1].id).not.toBe(washington.id);
+  });
+
   it('creates the mailing and resolves/creates its property, owner, address and campaign', async () => {
     const res = await request(app).post('/api/mailings/bulk').send({ mailings: [item] });
     expect(res.status).toBe(201);

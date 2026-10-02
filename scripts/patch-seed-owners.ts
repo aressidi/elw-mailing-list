@@ -32,6 +32,7 @@ import {
   properties, owners, propertyOwners, mailingAddresses, mailings, mailingSuppression, deals,
 } from '../shared/schema';
 import { isSeedOwner } from './seed-owner-utils';
+import { matchPropertyByLocation } from '../shared/property-location';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -143,7 +144,9 @@ interface FixResult {
 async function processFix(db: any, fix: SeedOwnerFix, apply: boolean): Promise<FixResult> {
   console.log(`\n--- APN ${fix.apn} (${fix.county} County, ${fix.state}) ---`);
 
-  const [property] = await db.select().from(properties).where(eq(properties.apn, fix.apn));
+  // An APN is only unique within a county.
+  const sameApn = await db.select().from(properties).where(eq(properties.apn, fix.apn));
+  const property = matchPropertyByLocation<any>(sameApn, { state: fix.state, county: fix.county }).match;
   if (!property) {
     return { apn: fix.apn, status: 'error', detail: `No property found in DB for APN ${fix.apn}` };
   }

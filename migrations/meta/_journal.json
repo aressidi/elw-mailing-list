@@ -22,6 +22,13 @@
       "when": 1789077600000,
       "tag": "0002_wooden_micromacro",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790958477369,
+      "tag": "0003_natural_reaper",
+      "breakpoints": true
     }
   ]
 }
