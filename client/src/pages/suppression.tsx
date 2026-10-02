@@ -10,9 +10,6 @@ import { Ban, Plus, Loader2, AlertCircle, CheckCircle, X } from 'lucide-react';
 const REASON_OPTIONS = [
   { value: 'do_not_mail', label: 'Do Not Mail' },
   { value: 'bad_address', label: 'Bad Address' },
-  { value: 'deceased', label: 'Deceased' },
-  { value: 'sold', label: 'Sold Property' },
-  { value: 'other', label: 'Other' },
 ];
 
 export function Suppression() {
@@ -157,7 +154,7 @@ export function Suppression() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Suppression</h2>
-          <p className="text-gray-600 mt-1">Manage do-not-mail, deceased, and suppressed records</p>
+          <p className="text-gray-600 mt-1">Manage do-not-mail and bad-address records</p>
         </div>
         <button
           onClick={() => {

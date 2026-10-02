@@ -2080,7 +2080,7 @@ router.post('/suppression', async (req, res) => {
     }
 
     // Validate reason
-    const validReasons = ['do_not_mail', 'bad_address', 'deceased', 'sold', 'other'];
+    const validReasons = ['do_not_mail', 'bad_address'];
     if (!validReasons.includes(reason)) {
       return res.status(400).json(errorResponse(`Invalid reason. Must be one of: ${validReasons.join(', ')}`, 400));
     }

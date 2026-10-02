@@ -1,6 +1,6 @@
 export declare const ownerTypeEnum: import("drizzle-orm/pg-core").PgEnum<["individual", "company", "trust", "llc", "other"]>;
 export declare const hitTypeEnum: import("drizzle-orm/pg-core").PgEnum<["call", "email", "website", "text", "mail", "other"]>;
-export declare const suppressionReasonEnum: import("drizzle-orm/pg-core").PgEnum<["do_not_mail", "bad_address", "deceased", "sold", "other"]>;
+export declare const suppressionReasonEnum: import("drizzle-orm/pg-core").PgEnum<["do_not_mail", "bad_address"]>;
 export declare const dataSources: import("drizzle-orm/pg-core").PgTableWithColumns<{
     name: "data_sources";
     schema: undefined;
@@ -1012,14 +1012,14 @@ export declare const mailingSuppression: import("drizzle-orm/pg-core").PgTableWi
             tableName: "mailing_suppression";
             dataType: "string";
             columnType: "PgEnumColumn";
-            data: "bad_address" | "deceased" | "do_not_mail" | "other" | "sold";
+            data: "bad_address" | "do_not_mail";
             driverParam: string;
             notNull: false;
             hasDefault: true;
             isPrimaryKey: false;
             isAutoincrement: false;
             hasRuntimeDefault: false;
-            enumValues: ["do_not_mail", "bad_address", "deceased", "sold", "other"];
+            enumValues: ["do_not_mail", "bad_address"];
             baseColumn: never;
             identity: undefined;
             generated: undefined;
@@ -2188,14 +2188,14 @@ export declare const insertMailingSuppressionSchema: import("drizzle-zod").Build
         tableName: "mailing_suppression";
         dataType: "string";
         columnType: "PgEnumColumn";
-        data: "bad_address" | "deceased" | "do_not_mail" | "other" | "sold";
+        data: "bad_address" | "do_not_mail";
         driverParam: string;
         notNull: false;
         hasDefault: true;
         isPrimaryKey: false;
         isAutoincrement: false;
         hasRuntimeDefault: false;
-        enumValues: ["do_not_mail", "bad_address", "deceased", "sold", "other"];
+        enumValues: ["do_not_mail", "bad_address"];
         baseColumn: never;
         identity: undefined;
         generated: undefined;

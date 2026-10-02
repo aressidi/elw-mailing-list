@@ -33,7 +33,7 @@ async function seedStatsFixture() {
 
   await addDeal({ propertyId: wake.id, ownerId: o1.id, isLead: true, isConversion: false });
   await addDeal({ propertyId: durham.id, ownerId: o2.id, isLead: false, isConversion: true });
-  await addSuppression({ propertyId: durham.id, ownerId: o2.id, reason: 'sold' });
+  await addSuppression({ propertyId: durham.id, ownerId: o2.id, reason: 'bad_address' });
 
   return { spring, empty, linked };
 }
