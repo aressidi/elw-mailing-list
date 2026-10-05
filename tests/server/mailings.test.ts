@@ -166,6 +166,23 @@ describe('POST /api/mailings/bulk', () => {
     expect(rows[1].id).not.toBe(washington.id);
   });
 
+  it('stores the county of a property it creates in canonical form', async () => {
+    const res = await request(app).post('/api/mailings/bulk').send({
+      mailings: [
+        { ...item, apn: 'BULK-CANON-1', propertyState: 'AZ', propertyCounty: 'APACHE COUNTY' },
+        { ...item, apn: 'BULK-CANON-2', propertyState: 'FL', propertyCounty: 'miami-dade county' },
+      ],
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ created: 2, errors: [] });
+
+    const { rows } = await pool.query('SELECT apn, county FROM properties ORDER BY apn');
+    expect(rows).toEqual([
+      { apn: 'BULK-CANON-1', county: 'Apache' },
+      { apn: 'BULK-CANON-2', county: 'Miami-Dade' },
+    ]);
+  });
+
   it('creates the mailing and resolves/creates its property, owner, address and campaign', async () => {
     const res = await request(app).post('/api/mailings/bulk').send({ mailings: [item] });
     expect(res.status).toBe(201);

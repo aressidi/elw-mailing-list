@@ -46,7 +46,7 @@ import { isSeedOwner, deleteSeedOwnerLinksForProperty } from './seed-owner-utils
 import { normalizeIdentityName, ownerIdentityKey } from './owner-identity';
 import { GogSheetsCache, TabInfo } from './gog-sheets-cache';
 import { ApnRecoverer, ApnRecovery, APN_HEADER_ALIASES } from './apn-recovery';
-import { isDifferentLocation, matchPropertyByLocation } from '../shared/property-location';
+import { canonicalCounty, isDifferentLocation, matchPropertyByLocation } from '../shared/property-location';
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://localhost:5432/elw_mailing_list';
 const SHEET_ID = '1jVj15Gjr_vgq8pk-Dzvg2lx6BVdjKM7p6Jfhrae1yDM';
@@ -886,7 +886,9 @@ async function main() {
 
             // County/State: the row's own cells, nothing else.
             const state = row.get('State').toUpperCase() || null;
-            const county = row.get('County') || null;
+            // County is stored in its canonical form (canonicalCounty): Title
+            // Case, no trailing "County".
+            const county = canonicalCounty(row.get('County'));
             if (state && state.length > 2) throw new Error(`State "${state}" is not a 2-letter code`);
             inc(rowStateCounty, `${state ?? '(blank)'}|${county ?? '(blank)'}`);
             if (!state || !county) stats.countyStateBlank++;
@@ -1379,7 +1381,7 @@ async function main() {
       L.push('== STATE DISTRIBUTION (properties touched; with lat/long) ==');
       for (const s of stateDist) L.push(`  ${String(s.n).padStart(5)}  ${s.state}  (${s.ll} with lat/long)`);
       L.push('');
-      L.push('== COUNTY/STATE DISTRIBUTION (properties touched; county exactly as written in the sheet) ==');
+      L.push('== COUNTY/STATE DISTRIBUTION (properties touched; county in canonical form - Title Case, no "County" suffix) ==');
       for (const c of countyDist) L.push(`  ${String(c.n).padStart(5)}  ${c.state} | ${c.county}  (${c.ll} with lat/long)`);
       L.push('');
       L.push('== SOURCE COLUMN MAPPING / UNMAPPED DELTA ==');

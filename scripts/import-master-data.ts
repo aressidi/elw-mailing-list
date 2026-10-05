@@ -7,7 +7,7 @@ import {
   ownerTypeEnum, hitTypeEnum, suppressionReasonEnum
 } from '../shared/schema';
 import { eq } from 'drizzle-orm';
-import { matchPropertyByLocation } from '../shared/property-location';
+import { canonicalCounty, matchPropertyByLocation } from '../shared/property-location';
 import { normalizeCampaignName, cleanSheetLink, UNASSIGNED_CAMPAIGN_NAME } from './campaign-normalize';
 import { isSeedOwner, deleteSeedOwnerLinksForProperty } from './seed-owner-utils';
 
@@ -291,7 +291,7 @@ async function main() {
           const propertyValues: any = {
             apn: apn,
             state: row.state?.trim().toUpperCase() || null,
-            county: row.county?.trim() || null,
+            county: canonicalCounty(row.county),
             acres: parseAcres(row.acres),
             legalDescription: row.legalDescription?.trim() || null,
             dataSourceId: dataSourceId,

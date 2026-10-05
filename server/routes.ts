@@ -12,7 +12,7 @@ import {
   propertyOwners,
 } from '../shared/schema.js';
 import { ownerIdentityKey } from '../scripts/owner-identity.js';
-import { matchPropertyByLocation } from '../shared/property-location.js';
+import { canonicalCounty, matchPropertyByLocation } from '../shared/property-location.js';
 
 const router = Router();
 
@@ -36,6 +36,12 @@ router.get('/health', (_req, res) => {
 // ============================================================
 // Helper Functions
 // ============================================================
+
+// County from a request body, in the canonical form stored in
+// properties.county (see canonicalCounty). Anything but a string is no county.
+function canonicalCountyInput(value: unknown): string | null {
+  return typeof value === 'string' ? canonicalCounty(value) : null;
+}
 
 function getPagination(req: any): { limit: number; offset: number; page: number } {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
@@ -608,7 +614,7 @@ router.post('/properties/bulk', async (req, res) => {
 
         const updates: Record<string, any> = {};
         if (prop.state !== undefined) updates.state = prop.state;
-        if (prop.county !== undefined) updates.county = prop.county;
+        if (prop.county !== undefined) updates.county = canonicalCountyInput(prop.county);
         if (prop.zip !== undefined) updates.zip = prop.zip;
         if (prop.latitude !== undefined) updates.latitude = prop.latitude;
         if (prop.longitude !== undefined) updates.longitude = prop.longitude;
@@ -625,7 +631,7 @@ router.post('/properties/bulk', async (req, res) => {
       const result = await db.insert(properties).values({
         apn,
         state: prop.state || null,
-        county: prop.county || null,
+        county: canonicalCountyInput(prop.county),
         zip: prop.zip || null,
         latitude: prop.latitude,
         longitude: prop.longitude,
@@ -1657,7 +1663,7 @@ router.post('/mailings/bulk', async (req, res) => {
         const createdProp = await tx.insert(properties).values({
           apn,
           state: item.propertyState || null,
-          county: item.propertyCounty || null,
+          county: canonicalCountyInput(item.propertyCounty),
           zip: item.propertyZip || null,
           rawData: item.propertyRawData,
           legalDescription: item.legalDescription || null,
@@ -1926,7 +1932,9 @@ router.get('/mailings/by-county', async (req, res) => {
     const countyCounts: Record<string, { count: number; state: string; offers: number }> = {};
     
     for (const mailing of filteredResults) {
-      const county = mailing.property?.county || 'Unknown';
+      // Grouped on the canonical name so "Benton", "Benton County" and
+      // "BENTON" are one row even for values stored before normalization.
+      const county = canonicalCounty(mailing.property?.county) || 'Unknown';
       const mailingState = mailing.property?.state || 'Unknown';
       const key = `${mailingState}-${county}`;
       
