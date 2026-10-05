@@ -8,7 +8,7 @@ import { eq, sql } from 'drizzle-orm';
 import { normalizeCampaignName, cleanSheetLink, UNASSIGNED_CAMPAIGN_NAME } from './campaign-normalize';
 import { isSeedOwner, deleteSeedOwnerLinksForProperty } from './seed-owner-utils';
 import { normalizeIdentityName, ownerIdentityKey } from './owner-identity';
-import { matchPropertyByLocation } from '../shared/property-location';
+import { canonicalCounty, matchPropertyByLocation } from '../shared/property-location';
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://localhost:5432/elw_mailing_list';
 const SHEET_ID = '1SrqwoqPlxmceae5y7DylTvUkVOXjyb58dsjDY3KQ7zA';
@@ -301,7 +301,7 @@ async function main() {
           // properties.apn is no longer unique on its own (unique on apn +
           // state + county), so the former ON CONFLICT (apn) upsert is done
           // by hand: same APN in the same place = same property.
-          const rowLocation = { state: row.state?.trim().toUpperCase() || null, county: row.county?.trim() || null };
+          const rowLocation = { state: row.state?.trim().toUpperCase() || null, county: canonicalCounty(row.county) };
           const sameApn = await db.select({ id: properties.id, state: properties.state, county: properties.county })
             .from(properties).where(eq(properties.apn, apn));
           const existingProperty = matchPropertyByLocation(sameApn, rowLocation).match;

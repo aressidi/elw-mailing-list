@@ -97,6 +97,56 @@ describe('GET /api/mailings/by-county — unfiltered stats', () => {
   });
 });
 
+// REGRESSION: county is free text, so one county used to show up as several
+// rows ("Benton" / "Benton County", "DAVIDSON" / "Davidson"), double-counting
+// it. The report groups on the canonical name: Title Case, no "County" suffix.
+describe('GET /api/mailings/by-county — county spellings collapse', () => {
+  it('reports each county once however its name was stored', async () => {
+    const campaign = await addCampaign({ name: 'Spelling Fixture' });
+    const spellings: [string, string][] = [
+      ['AZ', 'Apache'], ['AZ', 'APACHE'], ['AZ', 'Apache County'], ['AZ', 'APACHE COUNTY'],
+      ['AR', 'Benton'], ['AR', 'Benton County'],
+      ['AR', 'Washington'], ['AR', 'WASHINGTON COUNTY'],
+      ['AR', 'SALINE'], ['AR', 'SALINE COUNTY'],
+      ['TN', 'Davidson'], ['TN', 'DAVIDSON'],
+      ['CO', 'Saguache County'], ['CO', 'SAGUACHE COUNTY'],
+    ];
+    for (const [i, [state, county]] of spellings.entries()) {
+      const p = await addProperty({ apn: `SPELL-${i}`, state, county });
+      await addMailing({ propertyId: p.id, campaignId: campaign.id, offerPrice: '100.00' });
+    }
+
+    const rows: CountyRow[] = [];
+    for (const state of ['AZ', 'AR', 'TN', 'CO']) {
+      const res = await request(app).get('/api/mailings/by-county').query({ state });
+      expect(res.status).toBe(200);
+      rows.push(...res.body.data);
+    }
+
+    expect(byCounty(rows)).toEqual([
+      { county: 'Apache', count: 4, offers: 400 },
+      { county: 'Benton', count: 2, offers: 200 },
+      { county: 'Davidson', count: 2, offers: 200 },
+      { county: 'Saguache', count: 2, offers: 200 },
+      { county: 'Saline', count: 2, offers: 200 },
+      { county: 'Washington', count: 2, offers: 200 },
+    ]);
+    // Merging rows must not drop or duplicate a mailing.
+    expect(rows.reduce((sum, r) => sum + r.count, 0)).toBe(spellings.length);
+  });
+
+  it('keeps same-named counties in different states apart', async () => {
+    const campaign = await addCampaign({ name: 'Two Washingtons Fixture' });
+    const p = await addProperty({ apn: 'SPELL-OR-1', state: 'OR', county: 'Washington County' });
+    await addMailing({ propertyId: p.id, campaignId: campaign.id, offerPrice: '50.00' });
+
+    const res = await request(app).get('/api/mailings/by-county');
+    const washingtons = (res.body.data as CountyRow[]).filter((r) => r.county === 'Washington');
+    expect(washingtons.map(({ state, count }) => ({ state, count })).sort((a, b) => a.state.localeCompare(b.state)))
+      .toEqual([{ state: 'AR', count: 2 }, { state: 'OR', count: 1 }]);
+  });
+});
+
 describe('GET /api/mailings/by-county — county names', () => {
   it('preserves hyphenated county names such as "Miami-Dade"', async () => {
     const campaign = await addCampaign({ name: 'Hyphen Fixture' });

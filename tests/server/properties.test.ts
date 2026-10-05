@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
 import {
-  resetDb, loadApp, addProperty, addOwner, addAddress, linkOwner, addCampaign, addMailing, addDeal, countRows,
+  resetDb, loadApp, addProperty, addOwner, addAddress, linkOwner, addCampaign, addMailing, addDeal, countRows, pool,
 } from './helpers.ts';
 
 let app: Express;
@@ -273,9 +273,35 @@ describe('POST /api/properties/bulk', () => {
     expect(await countRows('properties')).toBe(1);
 
     const detail = await request(app).get(`/api/properties/${existing.id}`);
-    expect(detail.body.data.county).toBe('Wake County');
+    expect(detail.body.data.county).toBe('Wake'); // stored in canonical form
     expect(detail.body.data.zip).toBe('27601');
     expect(detail.body.data.state).toBe('NC'); // untouched field preserved
+  });
+
+  it('stores county in canonical form: Title Case, without a "County" suffix', async () => {
+    const existing = await addProperty({ apn: 'CANON-0', state: 'TN', county: 'DAVIDSON' });
+    const res = await request(app).post('/api/properties/bulk').send({
+      properties: [
+        { apn: 'CANON-1', state: 'AZ', county: 'APACHE COUNTY' },
+        { apn: 'CANON-2', state: 'AR', county: '  benton   county ' },
+        { apn: 'CANON-3', state: 'FL', county: 'MIAMI-DADE' },
+        { apn: 'CANON-4', state: 'FL', county: 'St. Lucie County' },
+        { apn: 'CANON-5', state: 'NC', county: '   ' },
+        { apn: 'CANON-0', state: 'TN', county: 'DAVIDSON COUNTY' },
+      ],
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ created: 5, skipped: 1, errors: [] });
+
+    const { rows } = await pool.query('SELECT id, apn, county FROM properties ORDER BY apn');
+    expect(rows).toEqual([
+      { id: existing.id, apn: 'CANON-0', county: 'Davidson' },
+      { id: expect.any(Number), apn: 'CANON-1', county: 'Apache' },
+      { id: expect.any(Number), apn: 'CANON-2', county: 'Benton' },
+      { id: expect.any(Number), apn: 'CANON-3', county: 'Miami-Dade' },
+      { id: expect.any(Number), apn: 'CANON-4', county: 'St. Lucie' },
+      { id: expect.any(Number), apn: 'CANON-5', county: null },
+    ]);
   });
 
   it('treats the same APN in another county as a different parcel', async () => {
