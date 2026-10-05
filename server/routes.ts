@@ -1929,24 +1929,25 @@ router.get('/mailings/by-county', async (req, res) => {
     }
 
     // Calculate stats by county
-    const countyCounts: Record<string, { count: number; state: string; offers: number }> = {};
+    const countyCounts: Record<string, { county: string; state: string; count: number; offers: number }> = {};
     
     for (const mailing of filteredResults) {
       // Grouped on the canonical name so "Benton", "Benton County" and
       // "BENTON" are one row even for values stored before normalization.
       const county = canonicalCounty(mailing.property?.county) || 'Unknown';
       const mailingState = mailing.property?.state || 'Unknown';
-      const key = `${mailingState}-${county}`;
-      
+      // NUL separator: the key only groups by the (state, county) pair. The
+      // county is never parsed back out of it, so "Miami-Dade" survives intact.
+      const key = `${mailingState}\u0000${county}`;
+
       if (!countyCounts[key]) {
-        countyCounts[key] = { count: 0, state: mailingState, offers: 0 };
+        countyCounts[key] = { county, state: mailingState, count: 0, offers: 0 };
       }
       countyCounts[key].count++;
       countyCounts[key].offers += Number(mailing.offerPrice) || 0;
     }
 
-    const stats = Object.entries(countyCounts)
-      .map(([key, data]) => ({ county: key.split('-')[1] || key, ...data }))
+    const stats = Object.values(countyCounts)
       .sort((a, b) => b.count - a.count);
 
     res.json(successResponse(stats, { filter: state ? { state } : undefined }));
