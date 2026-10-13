@@ -1877,28 +1877,25 @@ router.post('/mailings/move', async (req, res) => {
 // GET /api/mailings/by-state - Stats: count by state
 router.get('/mailings/by-state', async (req, res) => {
   try {
-    // Get all mailings with their mailing addresses
-    const results = await db.query.mailings.findMany({
-      with: {
-        mailingAddress: true,
-      },
-    });
+    // Aggregate in SQL rather than loading every mailing into memory: the
+    // mailing_addresses join supplies the state, NULL addresses fall under
+    // "Unknown", and offer_price is summed (coalesced to 0) per state.
+    const result = await db.execute<{ state: string; count: number; offers: number }>(sql`
+      SELECT
+        COALESCE(ma.state, 'Unknown') AS state,
+        COUNT(m.id)::int AS count,
+        COALESCE(SUM(m.offer_price::numeric), 0)::float AS offers
+      FROM mailings m
+      LEFT JOIN mailing_addresses ma ON m.mailing_address_id = ma.id
+      GROUP BY COALESCE(ma.state, 'Unknown')
+      ORDER BY count DESC
+    `);
 
-    // Calculate stats by state
-    const stateCounts: Record<string, { count: number; offers: number }> = {};
-    
-    for (const mailing of results) {
-      const state = mailing.mailingAddress?.state || 'Unknown';
-      if (!stateCounts[state]) {
-        stateCounts[state] = { count: 0, offers: 0 };
-      }
-      stateCounts[state].count++;
-      stateCounts[state].offers += Number(mailing.offerPrice) || 0;
-    }
-
-    const stats = Object.entries(stateCounts)
-      .map(([state, data]) => ({ state, ...data }))
-      .sort((a, b) => b.count - a.count);
+    const stats = result.rows.map((row) => ({
+      state: row.state,
+      count: Number(row.count),
+      offers: Number(row.offers),
+    }));
 
     res.json(successResponse(stats));
   } catch (error) {
@@ -1912,30 +1909,31 @@ router.get('/mailings/by-county', async (req, res) => {
   try {
     const state = typeof req.query.state === 'string' ? req.query.state.trim() : '';
 
-    // Get mailings with property info
-    const results = await db.query.mailings.findMany({
-      with: {
-        property: true,
-      },
-    });
+    // Aggregate in SQL on the raw (state, county) as stored, rather than
+    // loading every mailing into memory. A state filter, when given, matches
+    // properties.state case-insensitively and whitespace-tolerantly; it also
+    // excludes property-less mailings, since those have no state to match.
+    const result = await db.execute<{ state: string | null; county: string | null; count: number; offers: number }>(sql`
+      SELECT
+        p.state AS state,
+        p.county AS county,
+        COUNT(m.id)::int AS count,
+        COALESCE(SUM(m.offer_price::numeric), 0)::float AS offers
+      FROM mailings m
+      LEFT JOIN properties p ON m.property_id = p.id
+      ${state ? sql`WHERE LOWER(TRIM(p.state)) = LOWER(TRIM(${state}))` : sql``}
+      GROUP BY p.state, p.county
+    `);
 
-    // Filter by state if provided (case-insensitive, whitespace-tolerant)
-    let filteredResults = results;
-    if (state) {
-      const normalizedState = state.toLowerCase();
-      filteredResults = results.filter(
-        m => (m.property?.state ?? '').trim().toLowerCase() === normalizedState
-      );
-    }
-
-    // Calculate stats by county
+    // Collapse the raw SQL groups onto the canonical county name so "Benton",
+    // "Benton County" and "BENTON" merge into one row even for values stored
+    // before normalization, while same-named counties in different states stay
+    // apart. Property-less mailings group under state/county "Unknown".
     const countyCounts: Record<string, { county: string; state: string; count: number; offers: number }> = {};
-    
-    for (const mailing of filteredResults) {
-      // Grouped on the canonical name so "Benton", "Benton County" and
-      // "BENTON" are one row even for values stored before normalization.
-      const county = canonicalCounty(mailing.property?.county) || 'Unknown';
-      const mailingState = mailing.property?.state || 'Unknown';
+
+    for (const row of result.rows) {
+      const county = canonicalCounty(row.county) || 'Unknown';
+      const mailingState = row.state || 'Unknown';
       // NUL separator: the key only groups by the (state, county) pair. The
       // county is never parsed back out of it, so "Miami-Dade" survives intact.
       const key = `${mailingState}\u0000${county}`;
@@ -1943,8 +1941,8 @@ router.get('/mailings/by-county', async (req, res) => {
       if (!countyCounts[key]) {
         countyCounts[key] = { county, state: mailingState, count: 0, offers: 0 };
       }
-      countyCounts[key].count++;
-      countyCounts[key].offers += Number(mailing.offerPrice) || 0;
+      countyCounts[key].count += Number(row.count);
+      countyCounts[key].offers += Number(row.offers);
     }
 
     const stats = Object.values(countyCounts)
@@ -2149,35 +2147,32 @@ router.post('/suppression', async (req, res) => {
 // GET /api/dashboard/mail-volume-by-month - Get mailings grouped by month
 router.get('/dashboard/mail-volume-by-month', async (_req, res) => {
   try {
-    // Get all mailings with their mailDate
-    const results = await db.query.mailings.findMany({
-      orderBy: asc(mailings.mailDate),
-      columns: {
-        mailDate: true,
-        createdAt: true,
-      },
-    });
+    // Aggregate the per-month counts in SQL rather than loading every mailing
+    // into memory. Each mailing falls in the month of its mail_date, or its
+    // created_at when there is no mail_date. The label matches the x-axis
+    // format below (e.g. "Oct 2026") so the counts can be mapped by month.
+    const result = await db.execute<{ month: string; count: number }>(sql`
+      SELECT
+        to_char(date_trunc('month', COALESCE(mail_date, created_at)), 'Mon YYYY') AS month,
+        COUNT(id)::int AS count
+      FROM mailings
+      WHERE COALESCE(mail_date, created_at) IS NOT NULL
+      GROUP BY date_trunc('month', COALESCE(mail_date, created_at))
+    `);
 
-    // Generate last 12 months including current month
+    const countsByMonth = new Map<string, number>(
+      result.rows.map((row) => [row.month, Number(row.count)])
+    );
+
+    // Generate the last 12 months, oldest first, ending with the current
+    // month, and map the SQL counts onto them (0 for months with no mailings).
     const months: { month: string; count: number }[] = [];
     const now = new Date();
-    
+
     for (let i = 11; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
       const monthLabel = d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-      months.push({ month: monthLabel, count: 0 });
-    }
-
-    // Count mailings per month
-    for (const mailing of results) {
-      const date = mailing.mailDate ? new Date(mailing.mailDate) : mailing.createdAt ? new Date(mailing.createdAt) : null;
-      if (!date) continue;
-      
-      const monthLabel = date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-      const monthEntry = months.find(m => m.month === monthLabel);
-      if (monthEntry) {
-        monthEntry.count++;
-      }
+      months.push({ month: monthLabel, count: countsByMonth.get(monthLabel) ?? 0 });
     }
 
     res.json(successResponse(months));
