@@ -1230,26 +1230,38 @@ router.patch('/campaigns/:id', async (req, res) => {
       return res.status(400).json(errorResponse('Invalid campaign ID', 400));
     }
 
-    const { name } = req.body;
-    if (!name || typeof name !== 'string' || name.trim().length === 0) {
-      return res.status(400).json(errorResponse('name is required', 400));
+    const { name, link } = req.body;
+    if (name === undefined && link === undefined) {
+      return res.status(400).json(errorResponse('name or link is required', 400));
     }
-    const trimmedName = name.trim();
 
     const existing = await db.select().from(campaigns).where(eq(campaigns.id, id)).limit(1);
     if (existing.length === 0) {
       return res.status(404).json(errorResponse('Campaign not found', 404));
     }
 
-    const key = normalizeCampaignKey(trimmedName);
-    const allCampaigns = await db.select({ id: campaigns.id, name: campaigns.name }).from(campaigns);
-    const conflict = allCampaigns.find((c) => c.id !== id && normalizeCampaignKey(c.name) === key);
-    if (conflict) {
-      return res.status(409).json(errorResponse('A different campaign with this name already exists', 409));
+    const updateFields: Partial<{ name: string; link: string | null }> = {};
+
+    if (name !== undefined) {
+      if (typeof name !== 'string' || name.trim().length === 0) {
+        return res.status(400).json(errorResponse('name must be a non-empty string', 400));
+      }
+      const trimmedName = name.trim();
+      const key = normalizeCampaignKey(trimmedName);
+      const allCampaigns = await db.select({ id: campaigns.id, name: campaigns.name }).from(campaigns);
+      const conflict = allCampaigns.find((c) => c.id !== id && normalizeCampaignKey(c.name) === key);
+      if (conflict) {
+        return res.status(409).json(errorResponse('A different campaign with this name already exists', 409));
+      }
+      updateFields.name = trimmedName;
+    }
+
+    if (link !== undefined) {
+      updateFields.link = typeof link === 'string' ? link.trim() : null;
     }
 
     const result = await db.update(campaigns)
-      .set({ name: trimmedName })
+      .set(updateFields)
       .where(eq(campaigns.id, id))
       .returning();
 
