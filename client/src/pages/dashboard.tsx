@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
@@ -7,10 +8,8 @@ import {
   useMailingStatsByState,
   useMailingStatsByCounty,
   useMailVolumeByMonth,
-  useMailingStatsByAcreBand,
   MailingStateStat,
   CountyStat,
-  AcreBandStat,
 } from '../hooks/use-api.ts';
 import {
   Building,
@@ -22,7 +21,9 @@ import {
   Megaphone,
   Loader2,
   MapPin,
-  Ruler,
+  Calendar,
+  Mail,
+  ChevronRight,
 } from 'lucide-react';
 import {
   BarChart,
@@ -35,33 +36,13 @@ import {
   PieChart,
   Pie,
   Cell,
-  LabelList,
 } from 'recharts';
-import { formatNumber, formatCurrency, formatPercent } from '../lib/format.ts';
+import { formatNumber, formatCurrency, formatPercent, formatDateISO } from '../lib/format.ts';
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316'];
 
-// Tooltip for the acre-band chart: the bar encodes conversion rate, so the
-// tooltip carries the volume and value context behind that single number.
-function AcreBandTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: AcreBandStat }> }) {
-  if (!active || !payload?.length) return null;
-  const b = payload[0].payload;
-  return (
-    <div className="rounded-lg bg-white px-3 py-2 text-sm shadow-lg">
-      <p className="font-semibold text-gray-900">{b.label}</p>
-      <p className="text-emerald-700 font-medium">{formatPercent(b.conversionRate)} conversion</p>
-      <div className="mt-1 space-y-0.5 text-xs text-gray-600">
-        <p>{formatNumber(b.mailed)} mailed</p>
-        <p>{formatNumber(b.leads)} leads · {formatNumber(b.deals)} deals</p>
-        <p>{formatCurrency(b.avgOffer)} avg offer</p>
-      </div>
-    </div>
-  );
-}
-
 export function Dashboard() {
   const [coverageState, setCoverageState] = useState('');
-  const [acreBandState, setAcreBandState] = useState('');
 
   const { data: statsData, isLoading: statsLoading } = useDashboardStats();
   const { data: stateStatsData, isLoading: stateLoading } = useMailingStatsByState();
@@ -69,17 +50,11 @@ export function Dashboard() {
     coverageState.trim() || undefined
   );
   const { data: mailVolumeData, isLoading: mailVolumeLoading } = useMailVolumeByMonth();
-  const { data: acreBandData, isLoading: acreBandLoading } = useMailingStatsByAcreBand(
-    acreBandState.trim() ? { state: acreBandState.trim() } : undefined
-  );
 
   const stats = statsData?.data;
   const stateStats = stateStatsData?.data || [];
   const countyStats = countyStatsData?.data || [];
   const mailVolume = mailVolumeData?.data || [];
-  const acreBands = acreBandData?.data || [];
-  // Only bands with mail sent are worth charting; keep them in size order.
-  const acreBandsMailed = acreBands.filter((b) => b.mailed > 0);
 
   const stateColumns: ColumnDef<MailingStateStat>[] = [
     {
@@ -137,52 +112,6 @@ export function Dashboard() {
       filterType: 'number',
       align: 'right',
       cell: (row) => formatCurrency(row.offers),
-    },
-  ];
-
-  const acreBandColumns: ColumnDef<AcreBandStat>[] = [
-    {
-      id: 'label',
-      header: 'Parcel Size',
-      accessorKey: 'label',
-      cell: (row) => <Badge variant="secondary">{row.label}</Badge>,
-    },
-    {
-      id: 'mailed',
-      header: 'Mailed',
-      accessorKey: 'mailed',
-      align: 'right',
-      cell: (row) => formatNumber(row.mailed),
-    },
-    {
-      id: 'avgOffer',
-      header: 'Avg Offer',
-      accessorKey: 'avgOffer',
-      align: 'right',
-      cell: (row) => formatCurrency(row.avgOffer),
-    },
-    {
-      id: 'leads',
-      header: 'Leads',
-      accessorKey: 'leads',
-      align: 'right',
-      cell: (row) => formatNumber(row.leads),
-    },
-    {
-      id: 'deals',
-      header: 'Deals',
-      accessorKey: 'deals',
-      align: 'right',
-      cell: (row) => formatNumber(row.deals),
-    },
-    {
-      id: 'conversionRate',
-      header: 'Conv. Rate',
-      accessorKey: 'conversionRate',
-      align: 'right',
-      cell: (row) => (
-        <span className="font-semibold text-emerald-700">{formatPercent(row.conversionRate)}</span>
-      ),
     },
   ];
 
@@ -373,100 +302,6 @@ export function Dashboard() {
             </Card>
           </div>
 
-          {/* Targeting by Acre Band */}
-          <div>
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-              <div>
-                <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                  <Ruler className="w-5 h-5 text-emerald-600" />
-                  Targeting by Acre Band
-                </h3>
-                <p className="text-sm text-gray-600 mt-0.5">
-                  Where mail lands by parcel size — bars are volume, labels are deal conversion rate.
-                </p>
-              </div>
-              <div>
-                <input
-                  type="text"
-                  placeholder="Filter by state (e.g. MI)"
-                  value={acreBandState}
-                  onChange={(e) => setAcreBandState(e.target.value)}
-                  className="input-field max-w-xs"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-              <Card className="lg:col-span-3">
-                <CardHeader>
-                  <CardTitle>Mail Volume by Parcel Size</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {acreBandLoading ? (
-                    <div className="flex items-center justify-center h-72">
-                      <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
-                    </div>
-                  ) : acreBandsMailed.length === 0 ? (
-                    <div className="text-center py-12 text-gray-500">
-                      <Ruler className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-                      <p>No mailing data available</p>
-                      {acreBandState && <p className="text-sm mt-1">Try removing the state filter</p>}
-                    </div>
-                  ) : (
-                    <div className="h-72">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={acreBandsMailed} margin={{ top: 20, right: 8, left: 0, bottom: 4 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-                          <XAxis dataKey="label" tick={{ fontSize: 12 }} />
-                          <YAxis
-                            tick={{ fontSize: 12 }}
-                            tickFormatter={(v: number) => formatNumber(v)}
-                            width={48}
-                          />
-                          <Tooltip cursor={{ fill: 'rgba(16,185,129,0.06)' }} content={<AcreBandTooltip />} />
-                          <Bar dataKey="mailed" fill="#10b981" radius={[4, 4, 0, 0]}>
-                            <LabelList
-                              dataKey="conversionRate"
-                              position="top"
-                              formatter={(v: unknown) => formatPercent(v as number)}
-                              style={{ fontSize: 11, fill: '#047857', fontWeight: 600 }}
-                            />
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card className="lg:col-span-2">
-                <CardHeader>
-                  <CardTitle>Band Breakdown</CardTitle>
-                </CardHeader>
-                <CardContent className="p-4">
-                  {acreBandLoading ? (
-                    <div className="flex items-center justify-center py-12">
-                      <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
-                    </div>
-                  ) : acreBandsMailed.length === 0 ? (
-                    <div className="text-center py-12 text-gray-500">
-                      <Ruler className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-                      <p>No data available</p>
-                    </div>
-                  ) : (
-                    <DataTable
-                      data={acreBandsMailed}
-                      columns={acreBandColumns}
-                      storageKey="dashboard_targeting_by_acre_band"
-                      emptyIcon={<Ruler className="w-12 h-12" />}
-                      emptyText="No acre-band data found"
-                    />
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-
           {/* Mailing Coverage: By State / By County */}
           <div>
             <h3 className="text-lg font-bold text-gray-900 mb-4">Mailing Coverage</h3>
@@ -545,41 +380,82 @@ export function Dashboard() {
 
           {/* Recent Activity */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Recent Mailings */}
+            {/* Recent Campaigns */}
             <Card>
               <CardHeader>
-                <CardTitle>Recent Mailings</CardTitle>
+                <CardTitle>Recent Campaigns</CardTitle>
               </CardHeader>
               <CardContent>
-                {!stats?.recentActivity?.mailings?.length ? (
+                {!stats?.recentActivity?.campaigns?.length ? (
                   <div className="text-center py-8 text-gray-500">
-                    <p>No recent mailings</p>
+                    <p>No recent campaigns</p>
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    {stats.recentActivity.mailings.map((mailing) => (
-                      <div
-                        key={mailing.id}
-                        className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium text-gray-900 truncate">
-                            {mailing.owner?.ownerName || 'Unknown Owner'}
-                          </p>
-                          <p className="text-sm text-gray-500 truncate">
-                            {mailing.property?.county}, {mailing.property?.state} • {mailing.campaign?.name}
-                          </p>
-                        </div>
-                        <div className="text-right ml-4">
-                          <p className="font-medium text-gray-900">
-                            {mailing.offerPrice ? formatCurrency(Number(mailing.offerPrice)) : '-'}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            {mailing.mailDate ? new Date(mailing.mailDate).toLocaleDateString() : '-'}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
+                  <div className="space-y-2">
+                    {stats.recentActivity.campaigns.map((campaign) => {
+                      const start = formatDateISO(campaign.firstMailDate);
+                      const end = formatDateISO(campaign.lastMailDate);
+                      const dateRange =
+                        !campaign.lastMailDate || start === end ? start : `${start} – ${end}`;
+                      const topCounties = campaign.counties.slice(0, 3);
+                      const moreCounties = campaign.counties.length - topCounties.length;
+                      return (
+                        <Link
+                          key={campaign.id}
+                          href={`/campaigns/${campaign.id}`}
+                          className="group block rounded-lg border border-gray-100 p-3 hover:bg-gray-50 hover:border-gray-200 transition-colors"
+                        >
+                          {/* Date range + volume: the lead attributes */}
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
+                              <Calendar className="w-3.5 h-3.5 text-gray-400" />
+                              {dateRange}
+                            </div>
+                            <div className="flex items-center gap-1.5 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                              <Mail className="w-3.5 h-3.5 text-gray-400" />
+                              {formatNumber(campaign.totalMailings)} mailed
+                            </div>
+                          </div>
+
+                          {/* Geography */}
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            {campaign.states.length > 0 ? (
+                              campaign.states.map((st) => (
+                                <Badge key={st} variant="secondary" className="font-mono text-xs font-semibold">
+                                  {st}
+                                </Badge>
+                              ))
+                            ) : (
+                              <span className="text-xs text-gray-400">No states</span>
+                            )}
+                            {topCounties.length > 0 && (
+                              <span
+                                className="text-xs text-gray-500 truncate max-w-[14rem]"
+                                title={campaign.counties.join(', ')}
+                              >
+                                {topCounties.join(', ')}
+                                {moreCounties > 0 && (
+                                  <span className="text-gray-400 font-medium"> +{moreCounties} more</span>
+                                )}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Secondary: name + responses */}
+                          <div className="mt-2 flex items-center justify-between gap-3">
+                            <span className="flex items-center gap-1 text-xs text-gray-400 truncate">
+                              <Megaphone className="w-3 h-3 shrink-0" />
+                              <span className="truncate">{campaign.name}</span>
+                            </span>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <Badge variant="warning">{formatNumber(campaign.leadsCount)} leads</Badge>
+                              <Badge variant="success">{formatNumber(campaign.dealsCount)} deals</Badge>
+                              <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors" />
+                            </div>
+                          </div>
+                        </Link>
+                      );
+                    })}
                   </div>
                 )}
               </CardContent>

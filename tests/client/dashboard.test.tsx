@@ -12,7 +12,15 @@ const COUNTIES = {
   nc: [{ county: 'Wake', state: 'NC', count: 3, offers: 3000 }],
 };
 
-function mockDashboardApi() {
+const RECENT_CAMPAIGN = {
+  id: 42, name: 'Spring Travis Pull', link: null, createdAt: '2026-03-01',
+  googleSheetLink: null, firstMailDate: '2026-03-01', lastMailDate: '2026-03-15',
+  totalMailings: 820, totalOwners: 800, totalProperties: 810, totalOfferAmount: 123456,
+  minAcres: 1, maxAcres: 20, states: ['TX'], counties: ['Travis', 'Harris', 'Bexar', 'Hays'],
+  hitsCount: 9, leadsCount: 4, dealsCount: 2, suppressionsCount: 1,
+};
+
+function mockDashboardApi(campaigns: unknown[] = []) {
   return mockFetch({
     '/api/dashboard/stats': () => ({
       body: {
@@ -23,7 +31,7 @@ function mockDashboardApi() {
             totalDeals: 12, totalLeads: 6, totalConversions: 2, totalSuppressed: 3,
             responseRate: '0.15', leadRate: '50.00', conversionRate: '16.67',
           },
-          recentActivity: { mailings: [], deals: [] },
+          recentActivity: { mailings: [], deals: [], campaigns },
         },
       },
     }),
@@ -38,8 +46,8 @@ function mockDashboardApi() {
   });
 }
 
-function renderDashboard() {
-  const fetchMock = mockDashboardApi();
+function renderDashboard(campaigns: unknown[] = []) {
+  const fetchMock = mockDashboardApi(campaigns);
   const { Wrapper } = createWrapper();
   render(<Dashboard />, { wrapper: Wrapper });
   // The dashboard now defaults to the "By Month" view; these assertions cover
@@ -68,8 +76,37 @@ describe('Dashboard overview', () => {
 
   it('shows empty states when there is no activity', async () => {
     renderDashboard();
-    expect(await screen.findByText('No recent mailings')).toBeInTheDocument();
+    expect(await screen.findByText('No recent campaigns')).toBeInTheDocument();
     expect(screen.getByText('No recent deals')).toBeInTheDocument();
+  });
+});
+
+describe('Dashboard → Recent Campaigns', () => {
+  /** The "Recent Campaigns" card, located by its visible title. */
+  async function recentCampaignsCard() {
+    const title = await screen.findByRole('heading', { name: /recent campaigns/i });
+    return title.closest('.rounded-xl') as HTMLElement;
+  }
+
+  it('shows campaign attributes (date range, states, counties, volume, responses) and links to the detail page', async () => {
+    renderDashboard([RECENT_CAMPAIGN]);
+    const card = await recentCampaignsCard();
+
+    // Date range from first → last mail date.
+    expect(within(card).getByText('2026-03-01 – 2026-03-15')).toBeInTheDocument();
+    // Volume mailed, with thousands separator.
+    expect(within(card).getByText('820 mailed')).toBeInTheDocument();
+    // Geography: state badge + leading counties (with overflow count).
+    expect(within(card).getByText('TX')).toBeInTheDocument();
+    expect(within(card).getByText(/Travis, Harris, Bexar/)).toBeInTheDocument();
+    expect(within(card).getByText(/\+1 more/)).toBeInTheDocument();
+    // Responses.
+    expect(within(card).getByText('4 leads')).toBeInTheDocument();
+    expect(within(card).getByText('2 deals')).toBeInTheDocument();
+    // Name is still present but secondary, and the row links to the campaign.
+    expect(within(card).getByText('Spring Travis Pull')).toBeInTheDocument();
+    const link = within(card).getByRole('link');
+    expect(link).toHaveAttribute('href', '/campaigns/42');
   });
 });
 
