@@ -1987,6 +1987,150 @@ router.get('/mailings/by-county', async (req, res) => {
   }
 });
 
+// GET /api/mailings/by-month-detail?startDate=&endDate= - Chronological
+// (newest month first) campaign overview for the dashboard. Answers "what did
+// we mail, where, and how much, in a given month?". Everything is aggregated
+// in SQL: the only rows crossing the wire are one per (month, campaign), each
+// already carrying its per-state and per-county volume breakdown as JSON.
+// Volume = count of mailing rows in that campaign/month; month comes from
+// mail_date (UTC-truncated, matching the UTC date display elsewhere).
+router.get('/mailings/by-month-detail', async (req, res) => {
+  try {
+    const startDate = typeof req.query.startDate === 'string' && req.query.startDate.trim()
+      ? req.query.startDate.trim()
+      : null;
+    const endDate = typeof req.query.endDate === 'string' && req.query.endDate.trim()
+      ? req.query.endDate.trim()
+      : null;
+
+    // `base` restricts to dated, campaign-tagged mailings and tags each with
+    // its UTC month + property location. The per-state / per-county rollups and
+    // the campaign-month totals all derive from it, so nothing but grouped
+    // aggregates ever materialize. States/counties for property-less mailings
+    // fall under "Unknown" rather than being dropped from the volume.
+    const result = await db.execute<{
+      month: string;
+      month_label: string;
+      campaign_id: number;
+      name: string;
+      first_mail_date: string;
+      volume: number;
+      volume_by_state: Record<string, number> | null;
+      volume_by_county: Record<string, number> | null;
+    }>(sql`
+      WITH base AS (
+        SELECT
+          to_char((m.mail_date AT TIME ZONE 'UTC'), 'YYYY-MM') AS month,
+          m.campaign_id AS campaign_id,
+          m.mail_date AS mail_date,
+          p.state AS state,
+          p.county AS county
+        FROM mailings m
+        LEFT JOIN properties p ON p.id = m.property_id
+        WHERE m.mail_date IS NOT NULL
+          AND m.campaign_id IS NOT NULL
+          ${startDate ? sql`AND m.mail_date >= ${startDate}::timestamptz` : sql``}
+          ${endDate ? sql`AND m.mail_date <= ${endDate}::timestamptz` : sql``}
+      ),
+      by_state AS (
+        SELECT month, campaign_id, COALESCE(NULLIF(TRIM(state), ''), 'Unknown') AS state, COUNT(*)::int AS cnt
+        FROM base
+        GROUP BY month, campaign_id, COALESCE(NULLIF(TRIM(state), ''), 'Unknown')
+      ),
+      by_county AS (
+        SELECT month, campaign_id, COALESCE(NULLIF(TRIM(county), ''), 'Unknown') AS county, COUNT(*)::int AS cnt
+        FROM base
+        GROUP BY month, campaign_id, COALESCE(NULLIF(TRIM(county), ''), 'Unknown')
+      ),
+      campaign_month AS (
+        SELECT month, campaign_id, MIN(mail_date) AS first_mail_date, COUNT(*)::int AS volume
+        FROM base
+        GROUP BY month, campaign_id
+      )
+      SELECT
+        cm.month AS month,
+        to_char(to_date(cm.month, 'YYYY-MM'), 'FMMonth YYYY') AS month_label,
+        cm.campaign_id AS campaign_id,
+        c.name AS name,
+        cm.first_mail_date AS first_mail_date,
+        cm.volume AS volume,
+        (SELECT json_object_agg(bs.state, bs.cnt) FROM by_state bs
+          WHERE bs.month = cm.month AND bs.campaign_id = cm.campaign_id) AS volume_by_state,
+        (SELECT json_object_agg(bc.county, bc.cnt) FROM by_county bc
+          WHERE bc.month = cm.month AND bc.campaign_id = cm.campaign_id) AS volume_by_county
+      FROM campaign_month cm
+      JOIN campaigns c ON c.id = cm.campaign_id
+      ORDER BY cm.month DESC, cm.volume DESC, cm.campaign_id DESC
+    `);
+
+    // Rows arrive newest-month-first with campaigns in descending volume, so a
+    // Map keyed by month preserves that order. County keys are canonicalized
+    // here (e.g. "Benton" / "Benton County" merge) the same way /by-county does.
+    interface MonthBucket {
+      month: string;
+      monthLabel: string;
+      campaignCount: number;
+      totalVolume: number;
+      campaigns: Array<{
+        campaignId: number;
+        name: string;
+        firstMailDate: string | null;
+        states: string[];
+        counties: string[];
+        volume: number;
+        volumeByState: Record<string, number>;
+        volumeByCounty: Record<string, number>;
+      }>;
+    }
+
+    const monthsMap = new Map<string, MonthBucket>();
+
+    for (const row of result.rows) {
+      let bucket = monthsMap.get(row.month);
+      if (!bucket) {
+        bucket = {
+          month: row.month,
+          monthLabel: row.month_label,
+          campaignCount: 0,
+          totalVolume: 0,
+          campaigns: [],
+        };
+        monthsMap.set(row.month, bucket);
+      }
+
+      const volumeByState: Record<string, number> = {};
+      for (const [st, n] of Object.entries(row.volume_by_state ?? {})) {
+        volumeByState[st] = Number(n);
+      }
+
+      const volumeByCounty: Record<string, number> = {};
+      for (const [rawCounty, n] of Object.entries(row.volume_by_county ?? {})) {
+        const county = rawCounty === 'Unknown' ? 'Unknown' : (canonicalCounty(rawCounty) || 'Unknown');
+        volumeByCounty[county] = (volumeByCounty[county] || 0) + Number(n);
+      }
+
+      const volume = Number(row.volume);
+      bucket.campaigns.push({
+        campaignId: Number(row.campaign_id),
+        name: row.name,
+        firstMailDate: row.first_mail_date || null,
+        states: Object.keys(volumeByState).sort((a, b) => (volumeByState[b] - volumeByState[a]) || a.localeCompare(b)),
+        counties: Object.keys(volumeByCounty).sort((a, b) => (volumeByCounty[b] - volumeByCounty[a]) || a.localeCompare(b)),
+        volume,
+        volumeByState,
+        volumeByCounty,
+      });
+      bucket.campaignCount += 1;
+      bucket.totalVolume += volume;
+    }
+
+    res.json(successResponse(Array.from(monthsMap.values())));
+  } catch (error) {
+    console.error('Error fetching mailings by month detail:', error);
+    res.status(500).json(errorResponse('Failed to fetch mailings by month detail'));
+  }
+});
+
 // ============================================================
 // Deals/Responses Routes
 // ============================================================

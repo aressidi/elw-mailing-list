@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
+import { MailingsByMonth } from '../components/MailingsByMonth.tsx';
 import {
   useDashboardStats,
   useMailingStatsByState,
@@ -39,6 +40,7 @@ const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'
 
 export function Dashboard() {
   const [coverageState, setCoverageState] = useState('');
+  const [tab, setTab] = useState<'month' | 'overview'>('month');
 
   const { data: statsData, isLoading: statsLoading } = useDashboardStats();
   const { data: stateStatsData, isLoading: stateLoading } = useMailingStatsByState();
@@ -134,12 +136,36 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-gray-900">Dashboard</h2>
-        <p className="text-gray-600 mt-1">Overview of your mailing list operations</p>
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Dashboard</h2>
+          <p className="text-gray-600 mt-1">
+            {tab === 'month'
+              ? 'What you mailed, where, and how much — newest month first'
+              : 'Overview of your mailing list operations'}
+          </p>
+        </div>
+        <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 self-start">
+          {([
+            { id: 'month', label: 'By Month' },
+            { id: 'overview', label: 'Overview' },
+          ] as const).map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                tab === t.id ? 'bg-blue-600 text-white' : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {statsLoading ? (
+      {tab === 'month' ? (
+        <MailingsByMonth />
+      ) : statsLoading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
         </div>

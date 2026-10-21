@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Dashboard } from '../../client/src/pages/dashboard.tsx';
 import { mockFetch, requestedUrls, createWrapper } from './utils.tsx';
@@ -42,6 +42,9 @@ function renderDashboard() {
   const fetchMock = mockDashboardApi();
   const { Wrapper } = createWrapper();
   render(<Dashboard />, { wrapper: Wrapper });
+  // The dashboard now defaults to the "By Month" view; these assertions cover
+  // the classic stat-card / coverage "Overview" tab, so switch to it.
+  fireEvent.click(screen.getByRole('button', { name: 'Overview' }));
   return fetchMock;
 }
 

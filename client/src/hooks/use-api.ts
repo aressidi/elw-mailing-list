@@ -239,6 +239,20 @@ export function useMailingStatsByCounty(state?: string) {
   });
 }
 
+export function useMailingsByMonthDetail(params?: { startDate?: string; endDate?: string }) {
+  const query = new URLSearchParams();
+  if (params?.startDate) query.set('startDate', params.startDate);
+  if (params?.endDate) query.set('endDate', params.endDate);
+  const qs = query.toString();
+  return useQuery({
+    queryKey: ['mailings', 'by-month-detail', params],
+    queryFn: () =>
+      fetchJson<{ success: boolean; data: MonthDetail[] }>(
+        `${API_BASE}/mailings/by-month-detail${qs ? `?${qs}` : ''}`
+      ),
+  });
+}
+
 // ─── Deals ───────────────────────────────────────────────────
 export function useDeals(params?: { page?: number; limit?: number; isLead?: boolean; isConversion?: boolean }) {
   const query = new URLSearchParams();
@@ -556,4 +570,26 @@ export interface DealStats {
 export interface MailVolumeByMonth {
   month: string;
   count: number;
+}
+
+// One campaign's footprint within a single month: where it mailed (states /
+// counties, each with a per-key volume breakdown), how much, and when it
+// started. Name is carried but deliberately de-emphasized in the UI.
+export interface MonthDetailCampaign {
+  campaignId: number;
+  name: string;
+  firstMailDate: string | null;
+  states: string[];
+  counties: string[];
+  volume: number;
+  volumeByState: Record<string, number>;
+  volumeByCounty: Record<string, number>;
+}
+
+export interface MonthDetail {
+  month: string; // 'YYYY-MM'
+  monthLabel: string; // 'September 2026'
+  campaignCount: number;
+  totalVolume: number;
+  campaigns: MonthDetailCampaign[];
 }

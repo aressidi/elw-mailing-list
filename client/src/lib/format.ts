@@ -35,6 +35,22 @@ export function formatDate(date: string | Date | undefined | null): string {
   });
 }
 
+// Pretty calendar date (e.g. "Sep 3, 2026") rendered in UTC, so a mail date
+// stored at a day's UTC boundary shows the same day for every viewer and lines
+// up with the UTC month buckets on the Mailings-by-Month view. Mirrors
+// formatDateISO's timezone rationale, but in a human-friendly format.
+export function formatDateUTC(date: string | Date | undefined | null): string {
+  if (!date) return '-';
+  const d = typeof date === 'string' ? new Date(date) : date;
+  if (isNaN(d.getTime())) return '-';
+  return d.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
 // Formats a date as an ISO calendar date (YYYY-MM-DD), using UTC so the
 // stored canonical mail date doesn't shift across the viewer's timezone.
 export function formatDateISO(date: string | Date | undefined | null): string {
