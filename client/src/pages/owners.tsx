@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef, ColumnFilters } from '../components/ui/DataTable.tsx';
 import { useOwners, Owner } from '../hooks/use-api.ts';
-import { formatDate, formatCurrency } from '../lib/format.ts';
+import { formatDate } from '../lib/format.ts';
 import { Users, Loader2 } from 'lucide-react';
 
 // How long to wait after a column filter changes before hitting the server,
@@ -130,34 +130,14 @@ export function Owners() {
       comparator: (a, b) => (a.propertyCount ?? 0) - (b.propertyCount ?? 0),
     },
     {
-      id: 'lastMailed',
+      id: 'lastMailDate',
       header: 'Last Mailed',
-      accessorKey: 'lastMailed',
+      accessorKey: 'lastMailDate',
       filterType: 'date',
-      cell: (row) => (row.lastMailed ? formatDate(row.lastMailed) : '—'),
-      // Nulls (never mailed) always sort to the bottom; otherwise order by the
-      // mail date so the default desc surfaces the most recently contacted.
-      comparator: (a, b) => {
-        const ta = a.lastMailed ? new Date(a.lastMailed).getTime() : -Infinity;
-        const tb = b.lastMailed ? new Date(b.lastMailed).getTime() : -Infinity;
-        return ta - tb;
-      },
-    },
-    {
-      id: 'lastOfferPrice',
-      header: 'Last Offer',
-      accessorKey: 'lastOfferPrice',
-      filterType: 'number',
-      align: 'right',
-      cell: (row) => (row.lastOfferPrice != null ? formatCurrency(row.lastOfferPrice) : '-'),
-      comparator: (a, b) => (Number(a.lastOfferPrice) || 0) - (Number(b.lastOfferPrice) || 0),
-    },
-    {
-      id: 'createdAt',
-      header: 'Created Date',
-      accessorKey: 'createdAt',
-      filterType: 'date',
-      cell: (row) => formatDate(row.createdAt),
+      cell: (row) => formatDate(row.lastMailDate),
+      comparator: (a, b) =>
+        (a.lastMailDate ? new Date(a.lastMailDate).getTime() : 0) -
+        (b.lastMailDate ? new Date(b.lastMailDate).getTime() : 0),
     },
   ];
 
@@ -198,7 +178,6 @@ export function Owners() {
                 data={owners}
                 columns={columns}
                 storageKey="owners_view_v2"
-                defaultSort={{ columnId: 'lastMailed', direction: 'desc' }}
                 onFilterChange={setColumnFilters}
                 onRowClick={handleRowClick}
                 emptyIcon={<Users className="w-12 h-12" />}
