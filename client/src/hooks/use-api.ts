@@ -589,3 +589,49 @@ export interface MailVolumeByMonth {
   month: string;
   count: number;
 }
+
+
+// ─── Intelligence ────────────────────────────────────────────
+export interface CountyRanking {
+  state: string;
+  county: string;
+  mailed: number;
+  deliveredProxy: number;
+  responses: number;
+  touches: number;
+  leads: number;
+  conversions: number;
+  responseRate: number;
+  leadRate: number;
+  conversionRate: number;
+  lastMailedDate: string | null;
+  monthsSinceLastMail: number | null;
+  avgAcres: number | null;
+  totalOffersSum: number;
+  suppressions: number;
+  badAddress: number;
+  badAddressRate: number;
+  remailCandidate: boolean;
+  avoid: boolean;
+}
+
+export interface CountyRankingMeta {
+  medianConversionRate: number;
+  minMailed: number;
+  remailMinMonths: number;
+  badAddressShareThreshold: number;
+  totalCounties: number;
+  remailCount: number;
+  avoidCount: number;
+}
+
+export function useCountyRanking() {
+  return useQuery({
+    queryKey: ['intelligence', 'county-ranking'],
+    queryFn: () =>
+      fetchJson<{ success: boolean; data: CountyRanking[]; meta: CountyRankingMeta }>(
+        `${API_BASE}/intelligence/county-ranking`
+      ),
+  });
+}
+
