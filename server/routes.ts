@@ -266,6 +266,18 @@ function withLastOffer<T extends { id: number }>(row: T, map: Map<number, LastOf
 interface PropertyPreview {
   id: number;
   apn: string;
+  state: string | null;
+  county: string | null;
+}
+
+// A distinct (state, county) location an owner holds property in, with how many
+// of their properties fall there. Aggregated across ALL of an owner's
+// properties (not just the previewed first few) so the Owners list can show a
+// compact "NC: Halifax; AR: Benton" style summary at a glance.
+interface OwnerLocationSummary {
+  state: string | null;
+  county: string | null;
+  count: number;
 }
 
 interface OwnerPreview {
@@ -277,26 +289,49 @@ const RELATED_RECORD_PREVIEW_LIMIT = 3;
 
 async function getPropertiesByOwner(
   ownerIds: number[]
-): Promise<Map<number, { propertyCount: number; properties: PropertyPreview[] }>> {
+): Promise<Map<number, { propertyCount: number; properties: PropertyPreview[]; locations: OwnerLocationSummary[] }>> {
   if (ownerIds.length === 0) return new Map();
   const result = await db.execute<{ owner_id: number; property_count: string; properties: PropertyPreview[] }>(sql`
     SELECT po.owner_id,
            count(*) AS property_count,
-           json_agg(json_build_object('id', p.id, 'apn', p.apn) ORDER BY p.id ASC) AS properties
+           json_agg(json_build_object('id', p.id, 'apn', p.apn, 'state', p.state, 'county', p.county) ORDER BY p.id ASC) AS properties
     FROM property_owners po
     JOIN properties p ON p.id = po.property_id
     WHERE po.owner_id IN ${ownerIds}
     GROUP BY po.owner_id
   `);
-  const map = new Map<number, { propertyCount: number; properties: PropertyPreview[] }>();
+  const map = new Map<number, { propertyCount: number; properties: PropertyPreview[]; locations: OwnerLocationSummary[] }>();
   for (const row of result.rows) {
     const all = Array.isArray(row.properties) ? row.properties : [];
     map.set(Number(row.owner_id), {
       propertyCount: Number(row.property_count),
       properties: all.slice(0, RELATED_RECORD_PREVIEW_LIMIT),
+      // Distinct (state, county) pairs across ALL of this owner's properties,
+      // so a multi-property owner reads as a short "NC: Halifax; AR: Benton"
+      // summary rather than a repeated-location list.
+      locations: summarizeLocations(all),
     });
   }
   return map;
+}
+
+// Collapses a property list into distinct (state, county) pairs with counts,
+// preserving first-seen order (properties arrive sorted by id). Nulls are kept
+// as their own bucket so owners with un-located properties still surface.
+function summarizeLocations(props: PropertyPreview[]): OwnerLocationSummary[] {
+  const byKey = new Map<string, OwnerLocationSummary>();
+  for (const p of props) {
+    const state = p.state ?? null;
+    const county = p.county ?? null;
+    const key = `${state ?? ''}|${county ?? ''}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      byKey.set(key, { state, county, count: 1 });
+    }
+  }
+  return Array.from(byKey.values());
 }
 
 async function getOwnersByProperty(
@@ -667,7 +702,7 @@ router.post('/properties/bulk', async (req, res) => {
 router.get('/owners', async (req, res) => {
   try {
     const { limit, offset, page } = getPagination(req);
-    const { name, firstName, lastName, ownerName, state, sortBy = 'id', sortOrder = 'asc' } = req.query;
+    const { name, firstName, lastName, ownerName, state, propertyState, propertyCounty, sortBy = 'id', sortOrder = 'asc' } = req.query;
 
     let conditions = [];
     if (name) {
@@ -703,6 +738,35 @@ router.get('/owners', async (req, res) => {
       );
     }
 
+    // Property location filters: keep owners that hold at least one property in
+    // a matching state/county. Done as an ilike subquery (SQL, pre-pagination)
+    // so the total reflects the filtered set and we never scan the full table
+    // in JS. property_owners -> properties is the owner->location join.
+    if (propertyState) {
+      conditions.push(
+        inArray(
+          owners.id,
+          db
+            .select({ ownerId: propertyOwners.ownerId })
+            .from(propertyOwners)
+            .innerJoin(properties, eq(properties.id, propertyOwners.propertyId))
+            .where(ilike(properties.state, `%${propertyState}%`))
+        )
+      );
+    }
+    if (propertyCounty) {
+      conditions.push(
+        inArray(
+          owners.id,
+          db
+            .select({ ownerId: propertyOwners.ownerId })
+            .from(propertyOwners)
+            .innerJoin(properties, eq(properties.id, propertyOwners.propertyId))
+            .where(ilike(properties.county, `%${propertyCounty}%`))
+        )
+      );
+    }
+
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     // Get total count
@@ -734,6 +798,7 @@ router.get('/owners', async (req, res) => {
         ...withLastOffer(o, lastOfferByOwner),
         propertyCount: properties?.propertyCount ?? 0,
         properties: properties?.properties ?? [],
+        locations: properties?.locations ?? [],
       };
     });
 

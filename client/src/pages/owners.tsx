@@ -3,13 +3,32 @@ import { useLocation, Link } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef, ColumnFilters } from '../components/ui/DataTable.tsx';
-import { useOwners, Owner } from '../hooks/use-api.ts';
+import { useOwners, Owner, OwnerLocationSummary } from '../hooks/use-api.ts';
 import { formatDate, formatCurrency } from '../lib/format.ts';
 import { Users, Loader2 } from 'lucide-react';
 
 // How long to wait after a column filter changes before hitting the server,
 // so rapid Apply/Reset clicks don't each trigger their own request.
 const FILTER_DEBOUNCE_MS = 350;
+
+// How many distinct county locations to list inline before collapsing the rest
+// into a "+N more" (the full set is still available via the cell tooltip).
+const LOCATION_PREVIEW_LIMIT = 3;
+
+// Distinct, order-preserving state codes an owner holds property in.
+function distinctStates(locations: OwnerLocationSummary[] | undefined): string[] {
+  const seen: string[] = [];
+  for (const loc of locations || []) {
+    if (loc.state && !seen.includes(loc.state)) seen.push(loc.state);
+  }
+  return seen;
+}
+
+// "County, ST" (or just the county/state when the other is missing).
+function formatLocation(loc: OwnerLocationSummary): string {
+  if (loc.county && loc.state) return `${loc.county}, ${loc.state}`;
+  return loc.county || loc.state || '-';
+}
 
 const OWNER_TYPES = [
   { value: 'individual', label: 'Individual' },
@@ -23,30 +42,51 @@ export function Owners() {
   const [, navigate] = useLocation();
   const [page, setPage] = useState(1);
   const [columnFilters, setColumnFilters] = useState<ColumnFilters>({});
-  const [nameFilters, setNameFilters] = useState<{ ownerName?: string; firstName?: string; lastName?: string }>({});
+  const [serverFilters, setServerFilters] = useState<{
+    ownerName?: string;
+    firstName?: string;
+    lastName?: string;
+    propertyState?: string;
+    propertyCounty?: string;
+  }>({});
 
-  // Debounce column filter changes before sending them to the server, since
-  // ownerName/firstName/lastName filtering must search the whole table, not
-  // just whichever page happens to be loaded client-side.
+  // Debounce column filter changes before sending them to the server. These
+  // filters must search the whole table (name across owners, state/county
+  // across each owner's properties), not just whichever page is loaded
+  // client-side, so they're applied server-side as ilike matches.
   useEffect(() => {
     const timer = setTimeout(() => {
-      setNameFilters({
+      setServerFilters({
         ownerName: columnFilters.ownerName?.value?.trim() || undefined,
         firstName: columnFilters.firstName?.value?.trim() || undefined,
         lastName: columnFilters.lastName?.value?.trim() || undefined,
+        propertyState: columnFilters.state?.value?.trim() || undefined,
+        propertyCounty: columnFilters.county?.value?.trim() || undefined,
       });
     }, FILTER_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [columnFilters.ownerName?.value, columnFilters.firstName?.value, columnFilters.lastName?.value]);
+  }, [
+    columnFilters.ownerName?.value,
+    columnFilters.firstName?.value,
+    columnFilters.lastName?.value,
+    columnFilters.state?.value,
+    columnFilters.county?.value,
+  ]);
 
-  const hasNameFilter = !!(nameFilters.ownerName || nameFilters.firstName || nameFilters.lastName);
+  const hasServerFilter = !!(
+    serverFilters.ownerName ||
+    serverFilters.firstName ||
+    serverFilters.lastName ||
+    serverFilters.propertyState ||
+    serverFilters.propertyCounty
+  );
 
   // We load a generous limit so client-side table sorting & column filtering is fast & comprehensive.
-  // When a name filter is active, it's applied server-side across the whole table (not just this page).
+  // When a server-side filter is active, it's applied across the whole table (not just this page).
   const { data, isLoading, isFetching } = useOwners({
-    page: hasNameFilter ? 1 : page,
+    page: hasServerFilter ? 1 : page,
     limit: 100,
-    ...nameFilters,
+    ...serverFilters,
   });
 
   const owners = data?.data || [];
@@ -128,6 +168,60 @@ export function Owners() {
         );
       },
       comparator: (a, b) => (a.propertyCount ?? 0) - (b.propertyCount ?? 0),
+    },
+    {
+      id: 'state',
+      header: 'State',
+      // Server-side ilike filter (propertyState); sorting disabled since an
+      // owner can span several states and rows only hold the current page.
+      filterType: 'text',
+      enableSorting: false,
+      cell: (row) => {
+        const states = distinctStates(row.locations);
+        if (states.length === 0) {
+          return <span className="text-gray-400 text-sm">-</span>;
+        }
+        return (
+          <div className="flex flex-wrap items-center gap-1">
+            {states.map((s) => (
+              <Badge key={s} variant="secondary" className="font-mono">
+                {s}
+              </Badge>
+            ))}
+          </div>
+        );
+      },
+    },
+    {
+      id: 'county',
+      header: 'County',
+      // Server-side ilike filter (propertyCounty). Shows each distinct
+      // (state, county) the owner holds property in, so multi-property owners
+      // read as a compact "Halifax, NC · Benton, AR" summary.
+      filterType: 'text',
+      enableSorting: false,
+      cell: (row) => {
+        const locations = (row.locations || []).filter((l) => l.county);
+        if (locations.length === 0) {
+          return <span className="text-gray-400 text-sm">-</span>;
+        }
+        const shown = locations.slice(0, LOCATION_PREVIEW_LIMIT);
+        const extra = locations.length - shown.length;
+        return (
+          <div
+            className="flex flex-col gap-0.5"
+            title={locations.map(formatLocation).join('; ')}
+          >
+            {shown.map((l) => (
+              <span key={`${l.state ?? ''}-${l.county}`} className="text-sm text-gray-700 whitespace-nowrap">
+                {formatLocation(l)}
+                {l.count > 1 && <span className="text-gray-400"> ×{l.count}</span>}
+              </span>
+            ))}
+            {extra > 0 && <span className="text-xs text-gray-500">+{extra} more</span>}
+          </div>
+        );
+      },
     },
     {
       id: 'lastOfferPrice',

@@ -72,7 +72,7 @@ export function usePropertySearch(q: string, limit = 20) {
 }
 
 // ─── Owners ──────────────────────────────────────────────────
-export function useOwners(params?: { page?: number; limit?: number; name?: string; firstName?: string; lastName?: string; ownerName?: string; state?: string }) {
+export function useOwners(params?: { page?: number; limit?: number; name?: string; firstName?: string; lastName?: string; ownerName?: string; state?: string; propertyState?: string; propertyCounty?: string }) {
   const query = new URLSearchParams();
   if (params?.page) query.set('page', String(params.page));
   if (params?.limit) query.set('limit', String(params.limit));
@@ -81,6 +81,8 @@ export function useOwners(params?: { page?: number; limit?: number; name?: strin
   if (params?.lastName) query.set('lastName', params.lastName);
   if (params?.ownerName) query.set('ownerName', params.ownerName);
   if (params?.state) query.set('state', params.state);
+  if (params?.propertyState) query.set('propertyState', params.propertyState);
+  if (params?.propertyCounty) query.set('propertyCounty', params.propertyCounty);
 
   return useQuery({
     queryKey: ['owners', params],
@@ -319,6 +321,17 @@ export interface LastOfferFields {
 export interface RelatedPropertyPreview {
   id: number;
   apn: string;
+  state: string | null;
+  county: string | null;
+}
+
+// A distinct (state, county) an owner holds property in, with how many of
+// their properties fall there. Aggregated server-side across ALL of an owner's
+// properties so a multi-property owner shows as a compact location summary.
+export interface OwnerLocationSummary {
+  state: string | null;
+  county: string | null;
+  count: number;
 }
 
 export interface RelatedOwnerPreview {
@@ -354,6 +367,7 @@ export interface Owner extends LastOfferFields {
   createdAt: string;
   propertyCount?: number;
   properties?: RelatedPropertyPreview[];
+  locations?: OwnerLocationSummary[];
 }
 
 export interface GlobalSearchProperty extends Property {
