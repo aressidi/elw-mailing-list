@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  formatNumber, formatCurrency, formatPercent, formatDate, formatAcreage, truncate,
+  formatNumber, formatCurrency, formatPercent, formatDate, formatDateISO,
+  formatAcreage, formatAcreRange, truncate,
 } from '../../client/src/lib/format.ts';
 import { cn } from '../../client/src/lib/utils.ts';
 
@@ -60,6 +61,40 @@ describe('formatDate', () => {
     expect(formatDate(null)).toBe('-');
     expect(formatDate('')).toBe('-');
     expect(formatDate('not a date')).toBe('-');
+  });
+});
+
+describe('formatDateISO', () => {
+  it('formats as a YYYY-MM-DD calendar date in UTC', () => {
+    expect(formatDateISO('2026-03-01T12:00:00Z')).toBe('2026-03-01');
+    expect(formatDateISO('2026-04-01T00:00:00Z')).toBe('2026-04-01');
+  });
+
+  it('shows a dash for missing or unparseable dates', () => {
+    expect(formatDateISO(null)).toBe('-');
+    expect(formatDateISO('')).toBe('-');
+    expect(formatDateISO('not a date')).toBe('-');
+  });
+});
+
+describe('formatAcreRange', () => {
+  it('renders a min-max span with an "acres" unit', () => {
+    expect(formatAcreRange(1, 20)).toBe('1-20 acres');
+    expect(formatAcreRange('5.0000', '20.5000')).toBe('5-20.5 acres');
+  });
+
+  it('collapses to a single value when min equals max', () => {
+    expect(formatAcreRange(5, 5)).toBe('5 acres');
+  });
+
+  it('tolerates a single known bound', () => {
+    expect(formatAcreRange(10, null)).toBe('10 acres');
+    expect(formatAcreRange(null, 10)).toBe('10 acres');
+  });
+
+  it('shows a dash when no acreage is known', () => {
+    expect(formatAcreRange(null, null)).toBe('-');
+    expect(formatAcreRange(undefined, undefined)).toBe('-');
   });
 });
 

@@ -959,8 +959,11 @@ function campaignStatsCte(): string {
         COUNT(DISTINCT m.owner_id)::int AS total_owners,
         COUNT(DISTINCT m.property_id)::int AS total_properties,
         COALESCE(SUM(CAST(m.offer_price AS NUMERIC)), 0)::numeric(14,2) AS total_offer_amount,
+        MIN(p.acres)::numeric(12,4) AS min_acres,
+        MAX(p.acres)::numeric(12,4) AS max_acres,
         COALESCE(ARRAY_AGG(DISTINCT p.state) FILTER (WHERE p.state IS NOT NULL), ARRAY[]::varchar[]) AS states,
         COALESCE(ARRAY_AGG(DISTINCT p.county) FILTER (WHERE p.county IS NOT NULL), ARRAY[]::varchar[]) AS counties,
+        COALESCE(cdc.hits_count, 0)::int AS hits_count,
         COALESCE(cdc.leads_count, 0)::int AS leads_count,
         COALESCE(cdc.deals_count, 0)::int AS deals_count,
         COALESCE(csc.suppressions_count, 0)::int AS suppressions_count
@@ -970,6 +973,7 @@ function campaignStatsCte(): string {
       LEFT JOIN (
         SELECT
           m1.campaign_id,
+          COUNT(DISTINCT d.id)::int AS hits_count,
           COUNT(DISTINCT CASE WHEN d.is_lead = true THEN d.id END)::int AS leads_count,
           COUNT(DISTINCT CASE WHEN d.is_conversion = true THEN d.id END)::int AS deals_count
         FROM mailings m1
@@ -995,7 +999,7 @@ function campaignStatsCte(): string {
         WHERE m3.campaign_id IS NOT NULL
         GROUP BY m3.campaign_id
       ) cs ON cs.campaign_id = c.id
-      GROUP BY c.id, c.name, c.link, c.created_at, cs.sample_source_link, cdc.leads_count, cdc.deals_count, csc.suppressions_count
+      GROUP BY c.id, c.name, c.link, c.created_at, cs.sample_source_link, cdc.hits_count, cdc.leads_count, cdc.deals_count, csc.suppressions_count
     )
   `;
 }
@@ -1013,8 +1017,11 @@ function formatCampaignStatsRow(r: any) {
     totalOwners: Number(r.total_owners) || 0,
     totalProperties: Number(r.total_properties) || 0,
     totalOfferAmount: Number(r.total_offer_amount) || 0,
+    minAcres: r.min_acres != null ? Number(r.min_acres) : null,
+    maxAcres: r.max_acres != null ? Number(r.max_acres) : null,
     states: Array.isArray(r.states) ? r.states : [],
     counties: Array.isArray(r.counties) ? r.counties : [],
+    hitsCount: Number(r.hits_count) || 0,
     leadsCount: Number(r.leads_count) || 0,
     dealsCount: Number(r.deals_count) || 0,
     suppressionsCount: Number(r.suppressions_count) || 0,
@@ -1040,7 +1047,20 @@ router.get('/campaigns', async (req, res) => {
           break;
         case 'totalMailings':
         case 'mailings':
+        case 'volume':
           orderCol = 'total_mailings';
+          break;
+        case 'minAcres':
+        case 'acreRange':
+        case 'acres':
+          orderCol = 'min_acres';
+          break;
+        case 'maxAcres':
+          orderCol = 'max_acres';
+          break;
+        case 'hitsCount':
+        case 'hits':
+          orderCol = 'hits_count';
           break;
         case 'totalOwners':
         case 'owners':

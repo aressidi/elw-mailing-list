@@ -1,15 +1,16 @@
 import { useState } from 'react';
-import { useLocation, Link } from 'wouter';
+import { useLocation } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
 import { useCampaignsWithStats, CampaignWithStats } from '../hooks/use-api.ts';
-import { formatDate, formatCurrency, formatNumber } from '../lib/format.ts';
+import { formatDateISO, formatAcreRange, formatNumber } from '../lib/format.ts';
 import {
   Megaphone,
   ExternalLink,
   Loader2,
-  Users,
+  Mail,
+  Ruler,
   FileSpreadsheet,
   Calendar,
 } from 'lucide-react';
@@ -29,81 +30,110 @@ export function Campaigns() {
 
   const columns: ColumnDef<CampaignWithStats>[] = [
     {
-      id: 'name',
-      header: 'Campaign Name',
-      accessorKey: 'name',
+      id: 'states',
+      header: 'States',
+      accessorFn: (row) => row.states.join(', '),
       filterType: 'text',
       cell: (row) => (
-        <Link href={`/campaigns/${row.id}`}>
-          <span
-            className="font-medium text-blue-600 hover:underline"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {row.name}
-          </span>
-        </Link>
-      ),
-    },
-    {
-      id: 'totalMailings',
-      header: 'Mailed / Owners',
-      accessorKey: 'totalMailings',
-      filterType: 'number',
-      align: 'right',
-      cell: (row) => (
-        <div>
-          <div className="inline-flex items-center gap-1 text-sm font-semibold text-gray-900">
-            <Users className="w-3.5 h-3.5 text-gray-400" />
-            {formatNumber(row.totalMailings)}
-          </div>
-          <div className="text-xs text-gray-500">{formatNumber(row.totalOwners)} owners</div>
+        <div className="flex flex-wrap gap-1 max-w-[12rem]">
+          {row.states.length > 0 ? (
+            row.states.map((st) => (
+              <Badge key={st} variant="secondary" className="font-mono text-xs font-semibold">
+                {st}
+              </Badge>
+            ))
+          ) : (
+            <span className="text-xs text-gray-400">-</span>
+          )}
         </div>
       ),
     },
     {
-      id: 'states',
-      header: 'States & Counties',
-      accessorFn: (row) => row.states.join(', '),
+      id: 'counties',
+      header: 'Counties',
+      accessorFn: (row) => row.counties.join(', '),
       filterType: 'text',
       cell: (row) => {
         const topCounties = row.counties.slice(0, 3);
         const remainingCounties = row.counties.length - 3;
         return (
-          <div className="space-y-1.5 max-w-xs">
-            <div className="flex flex-wrap gap-1">
-              {row.states.length > 0 ? (
-                row.states.map((st) => (
-                  <Badge key={st} variant="secondary" className="font-mono text-xs font-semibold">
-                    {st}
-                  </Badge>
-                ))
-              ) : (
-                <span className="text-xs text-gray-400">-</span>
-              )}
-            </div>
-            <div className="text-xs text-gray-600 truncate" title={row.counties.join(', ')}>
-              {topCounties.length > 0 ? (
-                <>
-                  <span>{topCounties.join(', ')}</span>
-                  {remainingCounties > 0 && (
-                    <span className="text-gray-400 font-medium ml-1">+{remainingCounties} more</span>
-                  )}
-                </>
-              ) : (
-                <span className="text-gray-400">-</span>
-              )}
-            </div>
+          <div className="text-xs text-gray-700 max-w-xs truncate" title={row.counties.join(', ')}>
+            {topCounties.length > 0 ? (
+              <>
+                <span>{topCounties.join(', ')}</span>
+                {remainingCounties > 0 && (
+                  <span className="text-gray-400 font-medium ml-1">+{remainingCounties} more</span>
+                )}
+              </>
+            ) : (
+              <span className="text-gray-400">-</span>
+            )}
           </div>
         );
       },
     },
     {
-      id: 'totalOfferAmount',
-      header: 'Offers',
-      accessorKey: 'totalOfferAmount',
+      id: 'firstMailDate',
+      header: 'Mailing Date',
+      accessorKey: 'firstMailDate',
+      filterType: 'date',
+      cell: (row) => (
+        <div>
+          <div className="flex items-center gap-1.5 text-sm text-gray-900 font-medium">
+            <Calendar className="w-3.5 h-3.5 text-gray-400" />
+            {formatDateISO(row.firstMailDate)}
+          </div>
+          {row.lastMailDate && row.lastMailDate !== row.firstMailDate && (
+            <div className="text-xs text-gray-500 mt-0.5">thru {formatDateISO(row.lastMailDate)}</div>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: 'totalMailings',
+      header: 'Volume Mailed',
+      accessorKey: 'totalMailings',
       filterType: 'number',
       align: 'right',
-      cell: (row) => (row.totalOfferAmount > 0 ? formatCurrency(row.totalOfferAmount) : '-'),
+      cell: (row) => (
+        <div className="inline-flex items-center gap-1 text-sm font-semibold text-gray-900">
+          <Mail className="w-3.5 h-3.5 text-gray-400" />
+          {formatNumber(row.totalMailings)}
+        </div>
+      ),
+    },
+    {
+      id: 'minAcres',
+      header: 'Acre Range',
+      accessorKey: 'minAcres',
+      filterType: 'number',
+      align: 'right',
+      cell: (row) => {
+        const range = formatAcreRange(row.minAcres, row.maxAcres);
+        return range === '-' ? (
+          <span className="text-xs text-gray-400">-</span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-sm text-gray-700">
+            <Ruler className="w-3.5 h-3.5 text-gray-400" />
+            {range}
+          </span>
+        );
+      },
+    },
+    {
+      id: 'hitsCount',
+      header: 'Hits',
+      accessorKey: 'hitsCount',
+      filterType: 'number',
+      align: 'center',
+      cell: (row) =>
+        row.hitsCount > 0 ? (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800">
+            {row.hitsCount}
+          </span>
+        ) : (
+          <span className="text-xs text-gray-400">0</span>
+        ),
     },
     {
       id: 'leadsCount',
@@ -174,30 +204,6 @@ export function Campaigns() {
           <span className="text-xs text-gray-400">-</span>
         ),
     },
-    {
-      id: 'firstMailDate',
-      header: 'Mail Date',
-      accessorKey: 'firstMailDate',
-      filterType: 'date',
-      cell: (row) => (
-        <div>
-          <div className="flex items-center gap-1.5 text-sm text-gray-900 font-medium">
-            <Calendar className="w-3.5 h-3.5 text-gray-400" />
-            {formatDate(row.firstMailDate)}
-          </div>
-          {row.lastMailDate && row.lastMailDate !== row.firstMailDate && (
-            <div className="text-xs text-gray-500 mt-0.5">thru {formatDate(row.lastMailDate)}</div>
-          )}
-        </div>
-      ),
-    },
-    {
-      id: 'createdAt',
-      header: 'Created',
-      accessorKey: 'createdAt',
-      filterType: 'date',
-      cell: (row) => formatDate(row.createdAt),
-    },
   ];
 
   return (
@@ -206,7 +212,7 @@ export function Campaigns() {
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Campaigns</h2>
           <p className="text-gray-600 mt-1">
-            High-level campaign overview: mailings, owners, response metrics, and geographic coverage
+            Mailing-level overview: geography, volume, acreage, and response metrics
           </p>
         </div>
         <div className="text-sm text-gray-500">
