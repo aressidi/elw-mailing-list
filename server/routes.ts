@@ -12,7 +12,6 @@ import {
   propertyOwners,
 } from '../shared/schema.js';
 import { ownerIdentityKey } from '../scripts/owner-identity.js';
-import { canonicalCounty, matchPropertyByLocation } from '../shared/property-location.js';
 import { acreBandByValue } from '../shared/acre-bands.js';
 import { canonicalCounty, matchPropertyByLocation, normalizeCounty } from '../shared/property-location.js';
 import { ACRE_BAND_KEYS, acreBandCaseSql, acreBandLabel } from '../shared/acreage.js';
