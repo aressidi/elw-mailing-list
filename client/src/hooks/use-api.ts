@@ -39,19 +39,21 @@ export function useMailVolumeByMonth() {
 }
 
 // ─── Properties ──────────────────────────────────────────────
-export function useProperties(params?: { page?: number; limit?: number; state?: string; county?: string; apn?: string; sortBy?: string; sortOrder?: string }) {
+export function useProperties(params?: { page?: number; limit?: number; state?: string; county?: string; apn?: string; owner?: string; acreBand?: string; sortBy?: string; sortOrder?: string }) {
   const query = new URLSearchParams();
   if (params?.page) query.set('page', String(params.page));
   if (params?.limit) query.set('limit', String(params.limit));
   if (params?.state) query.set('state', params.state);
   if (params?.county) query.set('county', params.county);
   if (params?.apn) query.set('apn', params.apn);
+  if (params?.owner) query.set('owner', params.owner);
+  if (params?.acreBand) query.set('acreBand', params.acreBand);
   if (params?.sortBy) query.set('sortBy', params.sortBy);
   if (params?.sortOrder) query.set('sortOrder', params.sortOrder);
 
   return useQuery({
     queryKey: ['properties', params],
-    queryFn: () => fetchJson<PaginatedResponse<Property[]>>(`${API_BASE}/properties?${query.toString()}`),
+    queryFn: () => fetchJson<PropertiesListResponse>(`${API_BASE}/properties?${query.toString()}`),
   });
 }
 
@@ -375,6 +377,24 @@ export interface Property extends LastOfferFields {
   createdAt: string;
   ownerCount?: number;
   owners?: RelatedOwnerPreview[];
+  // True when the parcel (or any linked owner) is on the suppression list;
+  // reasons holds the distinct suppression reason(s). Present on list rows.
+  suppressed?: boolean;
+  suppressionReasons?: string[];
+}
+
+// Aggregates over the whole filtered set (not just the current page) that back
+// the Properties page summary header. minAcres/maxAcres are decimal strings.
+export interface PropertiesSummary {
+  total: number;
+  minAcres: string | null;
+  maxAcres: string | null;
+  stateCount: number;
+  countyCount: number;
+}
+
+export interface PropertiesListResponse extends PaginatedResponse<Property[]> {
+  summary: PropertiesSummary;
 }
 
 export interface Owner extends LastOfferFields {

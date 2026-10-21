@@ -13,6 +13,7 @@ import {
 } from '../shared/schema.js';
 import { ownerIdentityKey } from '../scripts/owner-identity.js';
 import { canonicalCounty, matchPropertyByLocation } from '../shared/property-location.js';
+import { acreBandByValue } from '../shared/acre-bands.js';
 
 const router = Router();
 
@@ -323,6 +324,35 @@ async function getOwnersByProperty(
   return map;
 }
 
+// Batched suppression lookup for a page of properties. A parcel counts as
+// suppressed when a mailing_suppression row targets it directly (property_id)
+// or targets any of its linked owners (owner_id) -- the same OR relationship
+// the campaign aggregates use. Returns the distinct reason set per property;
+// absence from the map means not suppressed.
+async function getSuppressionByProperty(propertyIds: number[]): Promise<Map<number, string[]>> {
+  if (propertyIds.length === 0) return new Map();
+  const result = await db.execute<{ property_id: number; reasons: string[] }>(sql`
+    SELECT sub.property_id, array_agg(DISTINCT sub.reason) AS reasons
+    FROM (
+      SELECT ms.property_id AS property_id, ms.reason::text AS reason
+      FROM mailing_suppression ms
+      WHERE ms.property_id IN ${propertyIds}
+      UNION
+      SELECT po.property_id, ms.reason::text AS reason
+      FROM property_owners po
+      JOIN mailing_suppression ms ON ms.owner_id = po.owner_id
+      WHERE po.property_id IN ${propertyIds}
+    ) sub
+    GROUP BY sub.property_id
+  `);
+  const map = new Map<number, string[]>();
+  for (const row of result.rows) {
+    const reasons = Array.isArray(row.reasons) ? row.reasons.filter(Boolean) : [];
+    map.set(Number(row.property_id), reasons);
+  }
+  return map;
+}
+
 // ============================================================
 // Global Search Route
 // ============================================================
@@ -435,25 +465,53 @@ router.get('/search', async (req, res) => {
 // Properties Routes
 // ============================================================
 
-// GET /api/properties - List all (paginated), filter by state/county/APN
+// GET /api/properties - List all (paginated). Filters (all case-insensitive):
+// state, county, apn, owner (matches any linked owner's name), and acreBand
+// (a band token from shared/acre-bands). Also returns a `summary` block
+// aggregated over the whole filtered set for the page header.
 router.get('/properties', async (req, res) => {
   try {
     const { limit, offset, page } = getPagination(req);
-    const { state, county, apn, sortBy = 'id', sortOrder = 'asc' } = req.query;
+    const { state, county, apn, owner, acreBand, sortBy = 'id', sortOrder = 'asc' } = req.query;
 
-    let conditions = [];
-    if (state) conditions.push(eq(properties.state, state as string));
+    const conditions = [];
+    // State codes are stored uppercase; ilike (no wildcards) matches the exact
+    // code case-insensitively, e.g. "nc" -> "NC".
+    if (state) conditions.push(ilike(properties.state, state as string));
     if (county) conditions.push(ilike(properties.county, `%${county}%`));
     if (apn) conditions.push(ilike(properties.apn, `%${apn}%`));
+    if (owner) {
+      const ownerTerm = `%${owner as string}%`;
+      conditions.push(sql`EXISTS (
+        SELECT 1 FROM ${propertyOwners} po
+        JOIN ${owners} o ON o.id = po.owner_id
+        WHERE po.property_id = ${properties.id} AND o.owner_name ILIKE ${ownerTerm}
+      )`);
+    }
+    if (acreBand) {
+      const band = acreBandByValue(acreBand as string);
+      if (band) {
+        conditions.push(sql`${properties.acres} IS NOT NULL`);
+        conditions.push(sql`${properties.acres} >= ${band.min}`);
+        if (band.max !== null) conditions.push(sql`${properties.acres} < ${band.max}`);
+      }
+    }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    // Get total count
-    const totalResult = await db
-      .select({ count: count() })
+    // Single aggregate pass over the filtered set: total (drives pagination)
+    // plus the summary-header figures (acres span, distinct state/county counts).
+    const [summaryRow] = await db
+      .select({
+        total: count(),
+        minAcres: sql<string | null>`min(${properties.acres})`,
+        maxAcres: sql<string | null>`max(${properties.acres})`,
+        stateCount: sql<string>`count(distinct ${properties.state})`,
+        countyCount: sql<string>`count(distinct ${properties.county})`,
+      })
       .from(properties)
       .where(whereClause);
-    const total = totalResult[0]?.count || 0;
+    const total = summaryRow?.total || 0;
 
     // Get paginated results
     const results = await db
@@ -465,16 +523,20 @@ router.get('/properties', async (req, res) => {
       .offset(offset);
 
     const propertyIds = results.map((p) => p.id);
-    const [lastOfferByProperty, ownersByProperty] = await Promise.all([
+    const [lastOfferByProperty, ownersByProperty, suppressionByProperty] = await Promise.all([
       getLastOfferByProperty(propertyIds),
       getOwnersByProperty(propertyIds),
+      getSuppressionByProperty(propertyIds),
     ]);
     const resultsWithRelations = results.map((p) => {
-      const owners = ownersByProperty.get(p.id);
+      const ownerInfo = ownersByProperty.get(p.id);
+      const reasons = suppressionByProperty.get(p.id) ?? [];
       return {
         ...withLastOffer(p, lastOfferByProperty),
-        ownerCount: owners?.ownerCount ?? 0,
-        owners: owners?.owners ?? [],
+        ownerCount: ownerInfo?.ownerCount ?? 0,
+        owners: ownerInfo?.owners ?? [],
+        suppressed: reasons.length > 0,
+        suppressionReasons: reasons,
       };
     });
 
@@ -484,6 +546,13 @@ router.get('/properties', async (req, res) => {
         page,
         limit,
         totalPages: Math.ceil(total / limit),
+      },
+      summary: {
+        total,
+        minAcres: summaryRow?.minAcres ?? null,
+        maxAcres: summaryRow?.maxAcres ?? null,
+        stateCount: Number(summaryRow?.stateCount ?? 0),
+        countyCount: Number(summaryRow?.countyCount ?? 0),
       },
     }));
   } catch (error) {
