@@ -69,7 +69,12 @@ describe('GET /api/owners (list)', () => {
     const acme = res.body.data[0];
     expect(acme.propertyCount).toBe(5);
     expect(acme.properties).toHaveLength(3);
-    for (const p of acme.properties) expect(p).toEqual({ id: expect.any(Number), apn: expect.any(String) });
+    for (const p of acme.properties) expect(p).toEqual({
+      id: expect.any(Number),
+      apn: expect.any(String),
+      state: null,
+      county: null,
+    });
   });
 
   it('includes last-offer fields on every owner row', async () => {
@@ -111,6 +116,65 @@ describe('GET /api/owners?state= (mailing-address state filter)', () => {
     expect(page2.body.data).toHaveLength(1);
     expect(page2.body.data[0].ownerName).toMatch(/^NC Owner/);
     expect(page2.body.data[0].id).not.toBe(res.body.data[0].id);
+  });
+});
+
+describe('GET /api/owners property location (state/county)', () => {
+  const ids: Record<string, number> = {};
+
+  beforeAll(async () => {
+    await resetDb();
+    // Dana spans two states/counties; Erin sits in one; Finn has no property.
+    ids['Dana'] = (await addOwner({ ownerName: 'Dana Multi' })).id;
+    ids['Erin'] = (await addOwner({ ownerName: 'Erin Single' })).id;
+    ids['Finn'] = (await addOwner({ ownerName: 'Finn None' })).id;
+
+    const halifax1 = await addProperty({ apn: 'NC-1', state: 'NC', county: 'Halifax' });
+    const halifax2 = await addProperty({ apn: 'NC-2', state: 'NC', county: 'Halifax' });
+    const benton = await addProperty({ apn: 'AR-1', state: 'AR', county: 'Benton' });
+    await linkOwner(halifax1.id, ids['Dana']);
+    await linkOwner(halifax2.id, ids['Dana']);
+    await linkOwner(benton.id, ids['Dana']);
+
+    const morgan = await addProperty({ apn: 'AL-1', state: 'AL', county: 'Morgan' });
+    await linkOwner(morgan.id, ids['Erin']);
+  });
+
+  it('summarizes each owner into distinct (state, county) locations with counts', async () => {
+    const res = await request(app).get('/api/owners').query({ ownerName: 'Dana' });
+    expect(res.status).toBe(200);
+    const dana = res.body.data[0];
+    // Two Halifax properties collapse into one location with count 2.
+    expect(dana.locations).toEqual([
+      { state: 'NC', county: 'Halifax', count: 2 },
+      { state: 'AR', county: 'Benton', count: 1 },
+    ]);
+  });
+
+  it('returns an empty location list for an owner with no properties', async () => {
+    const res = await request(app).get('/api/owners').query({ ownerName: 'Finn' });
+    expect(res.body.data[0].locations).toEqual([]);
+  });
+
+  it('filters owners by property state with a case-insensitive ilike match', async () => {
+    const res = await request(app).get('/api/owners').query({ propertyState: 'nc' });
+    expect(res.body.data.map((o: any) => o.ownerName)).toEqual(['Dana Multi']);
+    expect(res.body.pagination.total).toBe(1);
+  });
+
+  it('filters owners by property county with a partial ilike match', async () => {
+    const res = await request(app).get('/api/owners').query({ propertyCounty: 'bent' });
+    expect(res.body.data.map((o: any) => o.ownerName)).toEqual(['Dana Multi']);
+  });
+
+  it('combines property state and county filters (both must hold across the owner\'s properties)', async () => {
+    // Erin's only property is AL/Morgan, so a Benton requirement excludes her;
+    // Dana has neither an AL property nor a Morgan county, so no owner matches.
+    const miss = await request(app).get('/api/owners').query({ propertyState: 'AL', propertyCounty: 'Benton' });
+    expect(miss.body.data).toHaveLength(0);
+
+    const hit = await request(app).get('/api/owners').query({ propertyState: 'AL', propertyCounty: 'Morgan' });
+    expect(hit.body.data.map((o: any) => o.ownerName)).toEqual(['Erin Single']);
   });
 });
 
