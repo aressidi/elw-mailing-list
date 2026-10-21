@@ -39,21 +39,19 @@ export function useMailVolumeByMonth() {
 }
 
 // ─── Properties ──────────────────────────────────────────────
-export function useProperties(params?: { page?: number; limit?: number; state?: string; county?: string; apn?: string; owner?: string; acreBand?: string; sortBy?: string; sortOrder?: string }) {
+export function useProperties(params?: { page?: number; limit?: number; state?: string; county?: string; apn?: string; sortBy?: string; sortOrder?: string }) {
   const query = new URLSearchParams();
   if (params?.page) query.set('page', String(params.page));
   if (params?.limit) query.set('limit', String(params.limit));
   if (params?.state) query.set('state', params.state);
   if (params?.county) query.set('county', params.county);
   if (params?.apn) query.set('apn', params.apn);
-  if (params?.owner) query.set('owner', params.owner);
-  if (params?.acreBand) query.set('acreBand', params.acreBand);
   if (params?.sortBy) query.set('sortBy', params.sortBy);
   if (params?.sortOrder) query.set('sortOrder', params.sortOrder);
 
   return useQuery({
     queryKey: ['properties', params],
-    queryFn: () => fetchJson<PropertiesListResponse>(`${API_BASE}/properties?${query.toString()}`),
+    queryFn: () => fetchJson<PaginatedResponse<Property[]>>(`${API_BASE}/properties?${query.toString()}`),
   });
 }
 
@@ -74,7 +72,7 @@ export function usePropertySearch(q: string, limit = 20) {
 }
 
 // ─── Owners ──────────────────────────────────────────────────
-export function useOwners(params?: { page?: number; limit?: number; name?: string; firstName?: string; lastName?: string; ownerName?: string; state?: string; propertyState?: string; propertyCounty?: string }) {
+export function useOwners(params?: { page?: number; limit?: number; name?: string; firstName?: string; lastName?: string; ownerName?: string; state?: string }) {
   const query = new URLSearchParams();
   if (params?.page) query.set('page', String(params.page));
   if (params?.limit) query.set('limit', String(params.limit));
@@ -83,8 +81,6 @@ export function useOwners(params?: { page?: number; limit?: number; name?: strin
   if (params?.lastName) query.set('lastName', params.lastName);
   if (params?.ownerName) query.set('ownerName', params.ownerName);
   if (params?.state) query.set('state', params.state);
-  if (params?.propertyState) query.set('propertyState', params.propertyState);
-  if (params?.propertyCounty) query.set('propertyCounty', params.propertyCounty);
 
   return useQuery({
     queryKey: ['owners', params],
@@ -243,43 +239,34 @@ export function useMailingStatsByCounty(state?: string) {
   });
 }
 
-// ─── Intelligence ────────────────────────────────────────────
-export function useCountyRanking() {
+export function useMailingStatsByAcreBand(params?: {
+  state?: string;
+  county?: string;
+  startDate?: string;
+  endDate?: string;
+}) {
+  const query = new URLSearchParams();
+  if (params?.state) query.set('state', params.state);
+  if (params?.county) query.set('county', params.county);
+  if (params?.startDate) query.set('startDate', params.startDate);
+  if (params?.endDate) query.set('endDate', params.endDate);
+  const qs = query.toString();
   return useQuery({
-    queryKey: ['intelligence', 'county-ranking'],
+    queryKey: ['mailings', 'stats', 'by-acre-band', params],
     queryFn: () =>
-      fetchJson<{ success: boolean; data: CountyRanking[]; meta: CountyRankingMeta }>(
-        `${API_BASE}/intelligence/county-ranking`
+      fetchJson<{ success: boolean; data: AcreBandStat[] }>(
+        `${API_BASE}/mailings/by-acre-band${qs ? `?${qs}` : ''}`
       ),
   });
 }
 
 // ─── Deals ───────────────────────────────────────────────────
-export type DealOutcome = 'lead' | 'conversion' | 'touch';
-
-export function useDeals(params?: {
-  page?: number;
-  limit?: number;
-  isLead?: boolean;
-  isConversion?: boolean;
-  hitType?: string;
-  outcome?: DealOutcome;
-  startDate?: string;
-  endDate?: string;
-  sortBy?: string;
-  sortOrder?: string;
-}) {
+export function useDeals(params?: { page?: number; limit?: number; isLead?: boolean; isConversion?: boolean }) {
   const query = new URLSearchParams();
   if (params?.page) query.set('page', String(params.page));
   if (params?.limit) query.set('limit', String(params.limit));
   if (params?.isLead !== undefined) query.set('isLead', String(params.isLead));
   if (params?.isConversion !== undefined) query.set('isConversion', String(params.isConversion));
-  if (params?.hitType) query.set('hitType', params.hitType);
-  if (params?.outcome) query.set('outcome', params.outcome);
-  if (params?.startDate) query.set('startDate', params.startDate);
-  if (params?.endDate) query.set('endDate', params.endDate);
-  if (params?.sortBy) query.set('sortBy', params.sortBy);
-  if (params?.sortOrder) query.set('sortOrder', params.sortOrder);
 
   return useQuery({
     queryKey: ['deals', params],
@@ -287,14 +274,10 @@ export function useDeals(params?: {
   });
 }
 
-export function useDealStats(params?: { startDate?: string; endDate?: string }) {
-  const query = new URLSearchParams();
-  if (params?.startDate) query.set('startDate', params.startDate);
-  if (params?.endDate) query.set('endDate', params.endDate);
-
+export function useDealStats() {
   return useQuery({
-    queryKey: ['deals', 'stats', params],
-    queryFn: () => fetchJson<{ success: boolean; data: DealStats }>(`${API_BASE}/deals/stats?${query.toString()}`),
+    queryKey: ['deals', 'stats'],
+    queryFn: () => fetchJson<{ success: boolean; data: DealStats }>(`${API_BASE}/deals/stats`),
   });
 }
 
@@ -347,8 +330,6 @@ export interface PaginatedResponse<T> {
 export interface LastOfferFields {
   lastOfferPrice: string | null;
   lastOfferDate: string | null;
-  // Date last mailed = max(mailings.mail_date); null when never mailed.
-  lastMailDate: string | null;
   offerCount: number;
 }
 
@@ -359,17 +340,6 @@ export interface LastOfferFields {
 export interface RelatedPropertyPreview {
   id: number;
   apn: string;
-  state: string | null;
-  county: string | null;
-}
-
-// A distinct (state, county) an owner holds property in, with how many of
-// their properties fall there. Aggregated server-side across ALL of an owner's
-// properties so a multi-property owner shows as a compact location summary.
-export interface OwnerLocationSummary {
-  state: string | null;
-  county: string | null;
-  count: number;
 }
 
 export interface RelatedOwnerPreview {
@@ -392,24 +362,6 @@ export interface Property extends LastOfferFields {
   createdAt: string;
   ownerCount?: number;
   owners?: RelatedOwnerPreview[];
-  // True when the parcel (or any linked owner) is on the suppression list;
-  // reasons holds the distinct suppression reason(s). Present on list rows.
-  suppressed?: boolean;
-  suppressionReasons?: string[];
-}
-
-// Aggregates over the whole filtered set (not just the current page) that back
-// the Properties page summary header. minAcres/maxAcres are decimal strings.
-export interface PropertiesSummary {
-  total: number;
-  minAcres: string | null;
-  maxAcres: string | null;
-  stateCount: number;
-  countyCount: number;
-}
-
-export interface PropertiesListResponse extends PaginatedResponse<Property[]> {
-  summary: PropertiesSummary;
 }
 
 export interface Owner extends LastOfferFields {
@@ -421,12 +373,8 @@ export interface Owner extends LastOfferFields {
   phone: string | null;
   email: string | null;
   createdAt: string;
-  // Last Mailed = max(mail_date) across the owner's mailings; null when the
-  // owner has never been mailed. Computed server-side (owners list endpoint).
-  lastMailed: string | null;
   propertyCount?: number;
   properties?: RelatedPropertyPreview[];
-  locations?: OwnerLocationSummary[];
 }
 
 export interface GlobalSearchProperty extends Property {
@@ -615,6 +563,16 @@ export interface CountyStat {
   offers: number;
 }
 
+export interface AcreBandStat {
+  band: string;
+  label: string;
+  mailed: number;
+  avgOffer: number;
+  leads: number;
+  deals: number;
+  conversionRate: number;
+}
+
 export interface DealStats {
   totalDeals: number;
   totalLeads: number;
@@ -629,40 +587,4 @@ export interface DealStats {
 export interface MailVolumeByMonth {
   month: string;
   count: number;
-}
-
-// Per (state, county) performance row from /intelligence/county-ranking.
-// Rates are percentages (0-100). avgAcres/lastMailedDate/monthsSinceLastMail
-// are null when the county has no acreage or has never been mailed.
-export interface CountyRanking {
-  state: string;
-  county: string;
-  mailed: number;
-  deliveredProxy: number;
-  responses: number;
-  touches: number;
-  leads: number;
-  conversions: number;
-  responseRate: number;
-  leadRate: number;
-  conversionRate: number;
-  lastMailedDate: string | null;
-  monthsSinceLastMail: number | null;
-  avgAcres: number | null;
-  totalOffersSum: number;
-  suppressions: number;
-  badAddress: number;
-  badAddressRate: number;
-  remailCandidate: boolean;
-  avoid: boolean;
-}
-
-export interface CountyRankingMeta {
-  medianConversionRate: number;
-  minMailed: number;
-  remailMinMonths: number;
-  badAddressShareThreshold: number;
-  totalCounties: number;
-  remailCount: number;
-  avoidCount: number;
 }
