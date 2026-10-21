@@ -1,3 +1,5 @@
+import { acreBandForValue } from '@shared/acre-bands';
+
 export function formatNumber(num: number | string | undefined | null): string {
   if (num === undefined || num === null) return '-';
   const n = typeof num === 'string' ? parseFloat(num) : num;
@@ -68,6 +70,13 @@ export function formatAcreRange(
   const high = hiValid ? hi : lo;
   if (low === high) return `${fmt(low)} acres`;
   return `${fmt(low)}-${fmt(high)} acres`;
+}
+
+// The acre-band label (e.g. "5–20 ac") a parcel falls into, or null when the
+// acreage is unknown. Delegates to the shared band definitions so the badge,
+// the filter dropdown, and the server filter all agree.
+export function formatAcreBand(acres: number | string | undefined | null): string | null {
+  return acreBandForValue(acres)?.label ?? null;
 }
 
 export function truncate(str: string | undefined | null, maxLen = 50): string {
