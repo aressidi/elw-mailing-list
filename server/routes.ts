@@ -2248,7 +2248,8 @@ router.get('/dashboard/stats', async (req, res) => {
         },
       }),
       db.query.deals.findMany({
-        orderBy: desc(deals.hitDate),
+        // Newest response first; id desc breaks ties so ordering is stable.
+        orderBy: [desc(deals.hitDate), desc(deals.id)],
         limit: 5,
         with: {
           property: true,
