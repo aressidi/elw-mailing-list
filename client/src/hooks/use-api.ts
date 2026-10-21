@@ -352,6 +352,9 @@ export interface Owner extends LastOfferFields {
   phone: string | null;
   email: string | null;
   createdAt: string;
+  // Last Mailed = max(mail_date) across the owner's mailings; null when the
+  // owner has never been mailed. Computed server-side (owners list endpoint).
+  lastMailed: string | null;
   propertyCount?: number;
   properties?: RelatedPropertyPreview[];
 }

@@ -244,6 +244,26 @@ async function getLastOfferByOwner(ownerIds: number[]): Promise<Map<number, Last
   return map;
 }
 
+// Last Mailed = the greatest mail_date across all of an owner's mailings
+// (null when the owner has never been mailed). Computed as a single batched
+// SQL aggregation keyed off the owner ids on the current page -- never one
+// query per row, and never a full-table scan in JS. Kept independent of the
+// Last Offer helpers so each can evolve (or be removed) on its own.
+async function getLastMailedByOwner(ownerIds: number[]): Promise<Map<number, string | null>> {
+  if (ownerIds.length === 0) return new Map();
+  const result = await db.execute<{ id: number; last_mail_date: string | null }>(sql`
+    SELECT owner_id AS id, max(mail_date) AS last_mail_date
+    FROM mailings
+    WHERE owner_id IN ${ownerIds}
+    GROUP BY owner_id
+  `);
+  const map = new Map<number, string | null>();
+  for (const row of result.rows) {
+    map.set(Number(row.id), row.last_mail_date);
+  }
+  return map;
+}
+
 // Never coerces a missing/null offer to 0 -- absence of mailings (or a
 // newest mailing with a null offer_price) both surface as null.
 function withLastOffer<T extends { id: number }>(row: T, map: Map<number, LastOfferInfo>) {
@@ -724,14 +744,16 @@ router.get('/owners', async (req, res) => {
     const results = await query;
 
     const ownerIdsForPage = results.map((o) => o.id);
-    const [lastOfferByOwner, propertiesByOwner] = await Promise.all([
+    const [lastOfferByOwner, lastMailedByOwner, propertiesByOwner] = await Promise.all([
       getLastOfferByOwner(ownerIdsForPage),
+      getLastMailedByOwner(ownerIdsForPage),
       getPropertiesByOwner(ownerIdsForPage),
     ]);
     const resultsWithRelations = results.map((o) => {
       const properties = propertiesByOwner.get(o.id);
       return {
         ...withLastOffer(o, lastOfferByOwner),
+        lastMailed: lastMailedByOwner.get(o.id) ?? null,
         propertyCount: properties?.propertyCount ?? 0,
         properties: properties?.properties ?? [],
       };
