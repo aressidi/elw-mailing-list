@@ -130,6 +130,20 @@ export function Owners() {
       comparator: (a, b) => (a.propertyCount ?? 0) - (b.propertyCount ?? 0),
     },
     {
+      id: 'lastMailed',
+      header: 'Last Mailed',
+      accessorKey: 'lastMailed',
+      filterType: 'date',
+      cell: (row) => (row.lastMailed ? formatDate(row.lastMailed) : '—'),
+      // Nulls (never mailed) always sort to the bottom; otherwise order by the
+      // mail date so the default desc surfaces the most recently contacted.
+      comparator: (a, b) => {
+        const ta = a.lastMailed ? new Date(a.lastMailed).getTime() : -Infinity;
+        const tb = b.lastMailed ? new Date(b.lastMailed).getTime() : -Infinity;
+        return ta - tb;
+      },
+    },
+    {
       id: 'lastOfferPrice',
       header: 'Last Offer',
       accessorKey: 'lastOfferPrice',
@@ -184,6 +198,7 @@ export function Owners() {
                 data={owners}
                 columns={columns}
                 storageKey="owners_view_v2"
+                defaultSort={{ columnId: 'lastMailed', direction: 'desc' }}
                 onFilterChange={setColumnFilters}
                 onRowClick={handleRowClick}
                 emptyIcon={<Users className="w-12 h-12" />}
