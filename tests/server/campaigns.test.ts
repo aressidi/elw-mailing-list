@@ -20,8 +20,8 @@ async function seedStatsFixture() {
   const empty = await addCampaign({ name: 'Empty Campaign' });
   const linked = await addCampaign({ name: 'Linked Campaign', link: 'https://docs.google.com/linked' });
 
-  const wake = await addProperty({ apn: 'S-WAKE', state: 'NC', county: 'Wake' });
-  const durham = await addProperty({ apn: 'S-DUR', state: 'NC', county: 'Durham' });
+  const wake = await addProperty({ apn: 'S-WAKE', state: 'NC', county: 'Wake', acres: '5' });
+  const durham = await addProperty({ apn: 'S-DUR', state: 'NC', county: 'Durham', acres: '20' });
   await addSourceLink(wake.id, 'https://docs.google.com/from-source');
   const o1 = await addOwner({ ownerName: 'Owner One' });
   const o2 = await addOwner({ ownerName: 'Owner Two' });
@@ -92,17 +92,22 @@ describe('GET /api/campaigns?include=stats', () => {
     expect(new Date(s.lastMailDate).toISOString()).toBe('2026-04-01T12:00:00.000Z');
   });
 
-  it('counts leads, deals (conversions) and suppressions tied to the campaign', async () => {
+  it('counts hits, leads, deals (conversions) and suppressions tied to the campaign', async () => {
     const s = await statsFor(ids.spring.id);
-    expect(s).toMatchObject({ leadsCount: 1, dealsCount: 1, suppressionsCount: 1 });
+    expect(s).toMatchObject({ hitsCount: 2, leadsCount: 1, dealsCount: 1, suppressionsCount: 1 });
+  });
+
+  it('reports the acre range (min/max) across the campaign properties', async () => {
+    const s = await statsFor(ids.spring.id);
+    expect(s).toMatchObject({ minAcres: 5, maxAcres: 20 });
   });
 
   it('still lists a campaign with zero mailings, with zeroed stats', async () => {
     const s = await statsFor(ids.empty.id);
     expect(s).toMatchObject({
       totalMailings: 0, totalOwners: 0, totalProperties: 0, totalOfferAmount: 0,
-      states: [], counties: [], leadsCount: 0, dealsCount: 0, suppressionsCount: 0,
-      firstMailDate: null, lastMailDate: null,
+      states: [], counties: [], hitsCount: 0, leadsCount: 0, dealsCount: 0, suppressionsCount: 0,
+      firstMailDate: null, lastMailDate: null, minAcres: null, maxAcres: null,
     });
   });
 

@@ -401,8 +401,11 @@ export interface CampaignWithStats extends Campaign {
   totalOwners: number;
   totalProperties: number;
   totalOfferAmount: number;
+  minAcres: number | null;
+  maxAcres: number | null;
   states: string[];
   counties: string[];
+  hitsCount: number;
   leadsCount: number;
   dealsCount: number;
   suppressionsCount: number;
