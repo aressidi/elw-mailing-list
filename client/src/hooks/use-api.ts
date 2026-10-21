@@ -240,12 +240,31 @@ export function useMailingStatsByCounty(state?: string) {
 }
 
 // ─── Deals ───────────────────────────────────────────────────
-export function useDeals(params?: { page?: number; limit?: number; isLead?: boolean; isConversion?: boolean }) {
+export type DealOutcome = 'lead' | 'conversion' | 'touch';
+
+export function useDeals(params?: {
+  page?: number;
+  limit?: number;
+  isLead?: boolean;
+  isConversion?: boolean;
+  hitType?: string;
+  outcome?: DealOutcome;
+  startDate?: string;
+  endDate?: string;
+  sortBy?: string;
+  sortOrder?: string;
+}) {
   const query = new URLSearchParams();
   if (params?.page) query.set('page', String(params.page));
   if (params?.limit) query.set('limit', String(params.limit));
   if (params?.isLead !== undefined) query.set('isLead', String(params.isLead));
   if (params?.isConversion !== undefined) query.set('isConversion', String(params.isConversion));
+  if (params?.hitType) query.set('hitType', params.hitType);
+  if (params?.outcome) query.set('outcome', params.outcome);
+  if (params?.startDate) query.set('startDate', params.startDate);
+  if (params?.endDate) query.set('endDate', params.endDate);
+  if (params?.sortBy) query.set('sortBy', params.sortBy);
+  if (params?.sortOrder) query.set('sortOrder', params.sortOrder);
 
   return useQuery({
     queryKey: ['deals', params],
@@ -253,10 +272,14 @@ export function useDeals(params?: { page?: number; limit?: number; isLead?: bool
   });
 }
 
-export function useDealStats() {
+export function useDealStats(params?: { startDate?: string; endDate?: string }) {
+  const query = new URLSearchParams();
+  if (params?.startDate) query.set('startDate', params.startDate);
+  if (params?.endDate) query.set('endDate', params.endDate);
+
   return useQuery({
-    queryKey: ['deals', 'stats'],
-    queryFn: () => fetchJson<{ success: boolean; data: DealStats }>(`${API_BASE}/deals/stats`),
+    queryKey: ['deals', 'stats', params],
+    queryFn: () => fetchJson<{ success: boolean; data: DealStats }>(`${API_BASE}/deals/stats?${query.toString()}`),
   });
 }
 

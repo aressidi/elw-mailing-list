@@ -70,6 +70,79 @@ export function formatAcreRange(
   return `${fmt(low)}-${fmt(high)} acres`;
 }
 
+// ─── Date range presets ──────────────────────────────────────
+// Investor-friendly quick ranges for filtering by hit date. Each preset
+// resolves to an inclusive {startDate, endDate} pair of ISO datetimes
+// (local time), ready to hand to the deals API. 'all' clears the range.
+export type DateRangePreset =
+  | 'this_month'
+  | 'last_month'
+  | 'last_3_months'
+  | 'last_6_months'
+  | 'this_year'
+  | 'all';
+
+export const DATE_RANGE_PRESETS: Array<{ value: DateRangePreset; label: string }> = [
+  { value: 'this_month', label: 'This Month' },
+  { value: 'last_month', label: 'Last Month' },
+  { value: 'last_3_months', label: 'Last 3 Months' },
+  { value: 'last_6_months', label: 'Last 6 Months' },
+  { value: 'this_year', label: 'This Year' },
+  { value: 'all', label: 'All Time' },
+];
+
+export interface DateRange {
+  startDate?: string;
+  endDate?: string;
+}
+
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+}
+
+function endOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+}
+
+// Resolves a preset to a concrete inclusive date range relative to `now`.
+export function dateRangeForPreset(preset: DateRangePreset, now = new Date()): DateRange {
+  const end = endOfDay(now);
+  switch (preset) {
+    case 'this_month': {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { startDate: start.toISOString(), endDate: end.toISOString() };
+    }
+    case 'last_month': {
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lastEnd = endOfDay(new Date(now.getFullYear(), now.getMonth(), 0));
+      return { startDate: start.toISOString(), endDate: lastEnd.toISOString() };
+    }
+    case 'last_3_months': {
+      const start = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
+      return { startDate: startOfDay(start).toISOString(), endDate: end.toISOString() };
+    }
+    case 'last_6_months': {
+      const start = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+      return { startDate: startOfDay(start).toISOString(), endDate: end.toISOString() };
+    }
+    case 'this_year': {
+      const start = new Date(now.getFullYear(), 0, 1);
+      return { startDate: start.toISOString(), endDate: end.toISOString() };
+    }
+    case 'all':
+    default:
+      return {};
+  }
+}
+
+// Converts an ISO datetime back to a YYYY-MM-DD value for <input type="date">.
+export function toDateInputValue(iso: string | undefined | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export function truncate(str: string | undefined | null, maxLen = 50): string {
   if (!str) return '-';
   if (str.length <= maxLen) return str;
