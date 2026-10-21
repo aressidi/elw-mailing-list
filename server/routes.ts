@@ -2544,6 +2544,8 @@ router.get('/intelligence/county-ranking', async (_req, res) => {
   } catch (error) {
     console.error('Error fetching county ranking:', error);
     res.status(500).json(errorResponse('Failed to fetch county ranking'));
+  }
+});
 // GET /api/mailings/by-acre-band?state=&county=&startDate=&endDate=
 // Targeting intelligence: for each parcel-size band (see shared/acreage.ts),
 // how many pieces were mailed, the average offer, and how many of those
