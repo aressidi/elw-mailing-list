@@ -239,16 +239,13 @@ export function useMailingStatsByCounty(state?: string) {
   });
 }
 
-export function useMailingsByMonthDetail(params?: { startDate?: string; endDate?: string }) {
-  const query = new URLSearchParams();
-  if (params?.startDate) query.set('startDate', params.startDate);
-  if (params?.endDate) query.set('endDate', params.endDate);
-  const qs = query.toString();
+// ─── Intelligence ────────────────────────────────────────────
+export function useCountyRanking() {
   return useQuery({
-    queryKey: ['mailings', 'by-month-detail', params],
+    queryKey: ['intelligence', 'county-ranking'],
     queryFn: () =>
-      fetchJson<{ success: boolean; data: MonthDetail[] }>(
-        `${API_BASE}/mailings/by-month-detail${qs ? `?${qs}` : ''}`
+      fetchJson<{ success: boolean; data: CountyRanking[]; meta: CountyRankingMeta }>(
+        `${API_BASE}/intelligence/county-ranking`
       ),
   });
 }
@@ -572,24 +569,38 @@ export interface MailVolumeByMonth {
   count: number;
 }
 
-// One campaign's footprint within a single month: where it mailed (states /
-// counties, each with a per-key volume breakdown), how much, and when it
-// started. Name is carried but deliberately de-emphasized in the UI.
-export interface MonthDetailCampaign {
-  campaignId: number;
-  name: string;
-  firstMailDate: string | null;
-  states: string[];
-  counties: string[];
-  volume: number;
-  volumeByState: Record<string, number>;
-  volumeByCounty: Record<string, number>;
+// Per (state, county) performance row from /intelligence/county-ranking.
+// Rates are percentages (0-100). avgAcres/lastMailedDate/monthsSinceLastMail
+// are null when the county has no acreage or has never been mailed.
+export interface CountyRanking {
+  state: string;
+  county: string;
+  mailed: number;
+  deliveredProxy: number;
+  responses: number;
+  touches: number;
+  leads: number;
+  conversions: number;
+  responseRate: number;
+  leadRate: number;
+  conversionRate: number;
+  lastMailedDate: string | null;
+  monthsSinceLastMail: number | null;
+  avgAcres: number | null;
+  totalOffersSum: number;
+  suppressions: number;
+  badAddress: number;
+  badAddressRate: number;
+  remailCandidate: boolean;
+  avoid: boolean;
 }
 
-export interface MonthDetail {
-  month: string; // 'YYYY-MM'
-  monthLabel: string; // 'September 2026'
-  campaignCount: number;
-  totalVolume: number;
-  campaigns: MonthDetailCampaign[];
+export interface CountyRankingMeta {
+  medianConversionRate: number;
+  minMailed: number;
+  remailMinMonths: number;
+  badAddressShareThreshold: number;
+  totalCounties: number;
+  remailCount: number;
+  avoidCount: number;
 }

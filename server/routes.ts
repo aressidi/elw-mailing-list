@@ -2132,6 +2132,254 @@ router.get('/mailings/by-month-detail', async (req, res) => {
 });
 
 // ============================================================
+// Intelligence Routes (forward-looking analytics)
+// ============================================================
+
+// A county needs at least this many mailings before its rates are trusted
+// enough to flag it. Below this, a lucky 1-of-3 conversion would look elite,
+// so sub-threshold counties are shown but never flagged and never counted
+// toward the conversion-rate median that the re-mail test compares against.
+const INTEL_MIN_MAILED = 50;
+// Re-mail candidates must be "rested": no mail sent in at least this many
+// whole months, so we're suggesting fresh dollars, not re-hitting a list
+// that's still warm.
+const INTEL_REMAIL_MIN_MONTHS = 3;
+// A county whose bad-address suppressions are at least this share of its
+// mailed volume is burning postage on undeliverable parcels -> avoid.
+const INTEL_BAD_ADDRESS_SHARE = 0.1;
+
+// Whole calendar months between a past date and now (0 if same month).
+function monthsSince(date: Date | null, now: Date): number | null {
+  if (!date || isNaN(date.getTime())) return null;
+  const months = (now.getFullYear() - date.getFullYear()) * 12 + (now.getMonth() - date.getMonth());
+  return months < 0 ? 0 : months;
+}
+
+// GET /api/intelligence/county-ranking
+// Ranks every mailed (state, county) by performance and flags where the next
+// mail dollar should (re-mail candidates) or should not (avoid/saturated) go.
+//
+// Attribution: a mailing/deal/suppression belongs to the county of its
+// linked PROPERTY. Property-less rows have no county and are excluded.
+//
+// Rates (expressed 0-100):
+//   responseRate   = (touches + leads + conversions) / mailed  (= all hits / mailed)
+//   leadRate       = leads / mailed
+//   conversionRate = conversions / mailed
+// where a "touch" is a deal that is neither a lead nor a conversion, so the
+// three buckets partition the deals and responseRate stays an honest
+// hits-per-mailing figure consistent with the dashboard's response rate.
+router.get('/intelligence/county-ranking', async (_req, res) => {
+  try {
+    // One pass over each fact table, grouped on the raw (state, county) as
+    // stored; the canonical collapse ("Benton" / "Benton County" / "BENTON")
+    // happens in JS below, mirroring /mailings/by-county. Everything returned
+    // is additive (counts, sums) or a MAX, so collapsing raw spellings is just
+    // summing / max-ing -- averages are rebuilt from acre_sum / acre_cnt.
+    const result = await db.execute<{
+      state: string | null;
+      county: string | null;
+      mailed: number;
+      offers_sum: number;
+      last_mailed: string | null;
+      acre_sum: number;
+      acre_cnt: number;
+      touches: number;
+      leads: number;
+      conversions: number;
+      suppressions: number;
+      bad_address: number;
+    }>(sql`
+      WITH mail_agg AS (
+        SELECT
+          p.state AS state,
+          p.county AS county,
+          COUNT(m.id)::int AS mailed,
+          COALESCE(SUM(m.offer_price::numeric), 0)::float AS offers_sum,
+          MAX(m.mail_date) AS last_mailed
+        FROM mailings m
+        JOIN properties p ON m.property_id = p.id
+        GROUP BY p.state, p.county
+      ),
+      acre_agg AS (
+        SELECT state, county,
+          COALESCE(SUM(acres::numeric), 0)::float AS acre_sum,
+          COUNT(acres)::int AS acre_cnt
+        FROM (
+          SELECT DISTINCT p.id, p.state, p.county, p.acres
+          FROM properties p
+          JOIN mailings m ON m.property_id = p.id
+        ) mp
+        GROUP BY state, county
+      ),
+      deal_agg AS (
+        SELECT
+          p.state AS state,
+          p.county AS county,
+          COUNT(d.id) FILTER (WHERE NOT COALESCE(d.is_lead, false) AND NOT COALESCE(d.is_conversion, false))::int AS touches,
+          COUNT(d.id) FILTER (WHERE d.is_lead)::int AS leads,
+          COUNT(d.id) FILTER (WHERE d.is_conversion)::int AS conversions
+        FROM deals d
+        JOIN properties p ON d.property_id = p.id
+        GROUP BY p.state, p.county
+      ),
+      supp_agg AS (
+        SELECT
+          p.state AS state,
+          p.county AS county,
+          COUNT(s.id)::int AS suppressions,
+          COUNT(s.id) FILTER (WHERE s.reason = 'bad_address')::int AS bad_address
+        FROM mailing_suppression s
+        JOIN properties p ON s.property_id = p.id
+        GROUP BY p.state, p.county
+      )
+      SELECT
+        ma.state,
+        ma.county,
+        ma.mailed,
+        ma.offers_sum,
+        ma.last_mailed,
+        COALESCE(aa.acre_sum, 0)::float AS acre_sum,
+        COALESCE(aa.acre_cnt, 0)::int AS acre_cnt,
+        COALESCE(da.touches, 0)::int AS touches,
+        COALESCE(da.leads, 0)::int AS leads,
+        COALESCE(da.conversions, 0)::int AS conversions,
+        COALESCE(sa.suppressions, 0)::int AS suppressions,
+        COALESCE(sa.bad_address, 0)::int AS bad_address
+      FROM mail_agg ma
+      LEFT JOIN acre_agg aa ON ma.state IS NOT DISTINCT FROM aa.state AND ma.county IS NOT DISTINCT FROM aa.county
+      LEFT JOIN deal_agg da ON ma.state IS NOT DISTINCT FROM da.state AND ma.county IS NOT DISTINCT FROM da.county
+      LEFT JOIN supp_agg sa ON ma.state IS NOT DISTINCT FROM sa.state AND ma.county IS NOT DISTINCT FROM sa.county
+    `);
+
+    // Collapse raw spellings onto the canonical county name, keyed by
+    // (state, canonicalCounty) with a NUL separator so hyphenated names like
+    // "Miami-Dade" survive. Same-named counties in different states stay apart.
+    interface Accum {
+      state: string;
+      county: string;
+      mailed: number;
+      offersSum: number;
+      lastMailed: Date | null;
+      acreSum: number;
+      acreCnt: number;
+      touches: number;
+      leads: number;
+      conversions: number;
+      suppressions: number;
+      badAddress: number;
+    }
+    const byCounty: Record<string, Accum> = {};
+
+    for (const row of result.rows) {
+      const county = canonicalCounty(row.county) || 'Unknown';
+      const state = row.state || 'Unknown';
+      const key = `${state}\u0000${county}`;
+      const last = row.last_mailed ? new Date(row.last_mailed) : null;
+
+      let acc = byCounty[key];
+      if (!acc) {
+        acc = byCounty[key] = {
+          state, county,
+          mailed: 0, offersSum: 0, lastMailed: null,
+          acreSum: 0, acreCnt: 0,
+          touches: 0, leads: 0, conversions: 0,
+          suppressions: 0, badAddress: 0,
+        };
+      }
+      acc.mailed += Number(row.mailed);
+      acc.offersSum += Number(row.offers_sum);
+      acc.acreSum += Number(row.acre_sum);
+      acc.acreCnt += Number(row.acre_cnt);
+      acc.touches += Number(row.touches);
+      acc.leads += Number(row.leads);
+      acc.conversions += Number(row.conversions);
+      acc.suppressions += Number(row.suppressions);
+      acc.badAddress += Number(row.bad_address);
+      if (last && (!acc.lastMailed || last > acc.lastMailed)) acc.lastMailed = last;
+    }
+
+    const now = new Date();
+    const rows = Object.values(byCounty).map((a) => {
+      const responses = a.touches + a.leads + a.conversions;
+      const rate = (n: number) => (a.mailed > 0 ? (n / a.mailed) * 100 : 0);
+      const badAddressRate = a.mailed > 0 ? (a.badAddress / a.mailed) * 100 : 0;
+      return {
+        state: a.state,
+        county: a.county,
+        mailed: a.mailed,
+        // Deliverable proxy: mailed volume net of known bad-address parcels
+        // (we don't track true USPS delivery, so this is the best stand-in).
+        deliveredProxy: Math.max(0, a.mailed - a.badAddress),
+        responses,
+        touches: a.touches,
+        leads: a.leads,
+        conversions: a.conversions,
+        responseRate: Math.round(rate(responses) * 100) / 100,
+        leadRate: Math.round(rate(a.leads) * 100) / 100,
+        conversionRate: Math.round(rate(a.conversions) * 100) / 100,
+        lastMailedDate: a.lastMailed ? a.lastMailed.toISOString() : null,
+        monthsSinceLastMail: monthsSince(a.lastMailed, now),
+        avgAcres: a.acreCnt > 0 ? Math.round((a.acreSum / a.acreCnt) * 100) / 100 : null,
+        totalOffersSum: Math.round(a.offersSum * 100) / 100,
+        suppressions: a.suppressions,
+        badAddress: a.badAddress,
+        badAddressRate: Math.round(badAddressRate * 100) / 100,
+      };
+    });
+
+    // Median conversion rate across counties that clear the volume threshold,
+    // so the "above median" test isn't skewed by tiny, noisy samples.
+    const eligible = rows.filter((r) => r.mailed >= INTEL_MIN_MAILED);
+    const sortedConv = eligible.map((r) => r.conversionRate).sort((a, b) => a - b);
+    const medianConversionRate = sortedConv.length
+      ? sortedConv.length % 2
+        ? sortedConv[(sortedConv.length - 1) / 2]
+        : (sortedConv[sortedConv.length / 2 - 1] + sortedConv[sortedConv.length / 2]) / 2
+      : 0;
+
+    const ranked = rows.map((r) => {
+      const qualifies = r.mailed >= INTEL_MIN_MAILED;
+      const remailCandidate =
+        qualifies &&
+        r.conversionRate > medianConversionRate &&
+        r.monthsSinceLastMail !== null &&
+        r.monthsSinceLastMail >= INTEL_REMAIL_MIN_MONTHS;
+      const avoid =
+        qualifies &&
+        ((r.responses === 0) || r.badAddressRate >= INTEL_BAD_ADDRESS_SHARE * 100);
+      return { ...r, remailCandidate, avoid };
+    });
+
+    // Default order: strongest performers first (conversion, then response,
+    // then volume). The client table is fully re-sortable.
+    ranked.sort(
+      (a, b) =>
+        b.conversionRate - a.conversionRate ||
+        b.responseRate - a.responseRate ||
+        b.mailed - a.mailed,
+    );
+
+    res.json(
+      successResponse(ranked, {
+        meta: {
+          medianConversionRate: Math.round(medianConversionRate * 100) / 100,
+          minMailed: INTEL_MIN_MAILED,
+          remailMinMonths: INTEL_REMAIL_MIN_MONTHS,
+          badAddressShareThreshold: INTEL_BAD_ADDRESS_SHARE * 100,
+          totalCounties: ranked.length,
+          remailCount: ranked.filter((r) => r.remailCandidate).length,
+          avoidCount: ranked.filter((r) => r.avoid).length,
+        },
+      }),
+    );
+  } catch (error) {
+    console.error('Error fetching county ranking:', error);
+    res.status(500).json(errorResponse('Failed to fetch county ranking'));
+  }
+});
+
+// ============================================================
 // Deals/Responses Routes
 // ============================================================
 
