@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Link } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
@@ -21,9 +21,12 @@ import {
   Megaphone,
   Loader2,
   MapPin,
-  Calendar,
+  Phone,
   Mail,
-  ChevronRight,
+  Globe,
+  MessageSquare,
+  HelpCircle,
+  ArrowUpDown,
 } from 'lucide-react';
 import {
   BarChart,
@@ -37,12 +40,23 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import { formatNumber, formatCurrency, formatPercent, formatDateISO } from '../lib/format.ts';
+import { formatNumber, formatCurrency, formatPercent, formatDate } from '../lib/format.ts';
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316'];
 
+// Icon per response (hit) type, matching the Deals page.
+const HIT_TYPE_ICONS: Record<string, typeof Phone> = {
+  call: Phone,
+  email: Mail,
+  website: Globe,
+  text: MessageSquare,
+  mail: Send,
+  other: HelpCircle,
+};
+
 export function Dashboard() {
   const [coverageState, setCoverageState] = useState('');
+  const [dealsSortDesc, setDealsSortDesc] = useState(true);
 
   const { data: statsData, isLoading: statsLoading } = useDashboardStats();
   const { data: stateStatsData, isLoading: stateLoading } = useMailingStatsByState();
@@ -52,6 +66,18 @@ export function Dashboard() {
   const { data: mailVolumeData, isLoading: mailVolumeLoading } = useMailVolumeByMonth();
 
   const stats = statsData?.data;
+
+  // Sort recent deals by hit date; API already returns newest-first, but we
+  // re-sort client-side so the card's sort toggle works on the loaded rows.
+  const recentDeals = useMemo(() => {
+    const deals = stats?.recentActivity?.deals ?? [];
+    return [...deals].sort((a, b) => {
+      const at = a.hitDate ? new Date(a.hitDate).getTime() : 0;
+      const bt = b.hitDate ? new Date(b.hitDate).getTime() : 0;
+      return dealsSortDesc ? bt - at : at - bt;
+    });
+  }, [stats?.recentActivity?.deals, dealsSortDesc]);
+
   const stateStats = stateStatsData?.data || [];
   const countyStats = countyStatsData?.data || [];
   const mailVolume = mailVolumeData?.data || [];
@@ -380,82 +406,41 @@ export function Dashboard() {
 
           {/* Recent Activity */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Recent Campaigns */}
+            {/* Recent Mailings */}
             <Card>
               <CardHeader>
-                <CardTitle>Recent Campaigns</CardTitle>
+                <CardTitle>Recent Mailings</CardTitle>
               </CardHeader>
               <CardContent>
-                {!stats?.recentActivity?.campaigns?.length ? (
+                {!stats?.recentActivity?.mailings?.length ? (
                   <div className="text-center py-8 text-gray-500">
-                    <p>No recent campaigns</p>
+                    <p>No recent mailings</p>
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    {stats.recentActivity.campaigns.map((campaign) => {
-                      const start = formatDateISO(campaign.firstMailDate);
-                      const end = formatDateISO(campaign.lastMailDate);
-                      const dateRange =
-                        !campaign.lastMailDate || start === end ? start : `${start} – ${end}`;
-                      const topCounties = campaign.counties.slice(0, 3);
-                      const moreCounties = campaign.counties.length - topCounties.length;
-                      return (
-                        <Link
-                          key={campaign.id}
-                          href={`/campaigns/${campaign.id}`}
-                          className="group block rounded-lg border border-gray-100 p-3 hover:bg-gray-50 hover:border-gray-200 transition-colors"
-                        >
-                          {/* Date range + volume: the lead attributes */}
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
-                              <Calendar className="w-3.5 h-3.5 text-gray-400" />
-                              {dateRange}
-                            </div>
-                            <div className="flex items-center gap-1.5 text-sm font-semibold text-gray-900 whitespace-nowrap">
-                              <Mail className="w-3.5 h-3.5 text-gray-400" />
-                              {formatNumber(campaign.totalMailings)} mailed
-                            </div>
-                          </div>
-
-                          {/* Geography */}
-                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                            {campaign.states.length > 0 ? (
-                              campaign.states.map((st) => (
-                                <Badge key={st} variant="secondary" className="font-mono text-xs font-semibold">
-                                  {st}
-                                </Badge>
-                              ))
-                            ) : (
-                              <span className="text-xs text-gray-400">No states</span>
-                            )}
-                            {topCounties.length > 0 && (
-                              <span
-                                className="text-xs text-gray-500 truncate max-w-[14rem]"
-                                title={campaign.counties.join(', ')}
-                              >
-                                {topCounties.join(', ')}
-                                {moreCounties > 0 && (
-                                  <span className="text-gray-400 font-medium"> +{moreCounties} more</span>
-                                )}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Secondary: name + responses */}
-                          <div className="mt-2 flex items-center justify-between gap-3">
-                            <span className="flex items-center gap-1 text-xs text-gray-400 truncate">
-                              <Megaphone className="w-3 h-3 shrink-0" />
-                              <span className="truncate">{campaign.name}</span>
-                            </span>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <Badge variant="warning">{formatNumber(campaign.leadsCount)} leads</Badge>
-                              <Badge variant="success">{formatNumber(campaign.dealsCount)} deals</Badge>
-                              <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors" />
-                            </div>
-                          </div>
-                        </Link>
-                      );
-                    })}
+                  <div className="space-y-3">
+                    {stats.recentActivity.mailings.map((mailing) => (
+                      <div
+                        key={mailing.id}
+                        className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-gray-900 truncate">
+                            {mailing.owner?.ownerName || 'Unknown Owner'}
+                          </p>
+                          <p className="text-sm text-gray-500 truncate">
+                            {mailing.property?.county}, {mailing.property?.state} • {mailing.campaign?.name}
+                          </p>
+                        </div>
+                        <div className="text-right ml-4">
+                          <p className="font-medium text-gray-900">
+                            {mailing.offerPrice ? formatCurrency(Number(mailing.offerPrice)) : '-'}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {mailing.mailDate ? new Date(mailing.mailDate).toLocaleDateString() : '-'}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </CardContent>
@@ -463,36 +448,66 @@ export function Dashboard() {
 
             {/* Recent Deals */}
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Recent Deals / Responses</CardTitle>
+                {recentDeals.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setDealsSortDesc((v) => !v)}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900"
+                    title="Sort by date"
+                  >
+                    <ArrowUpDown className="w-3.5 h-3.5" />
+                    {dealsSortDesc ? 'Newest first' : 'Oldest first'}
+                  </button>
+                )}
               </CardHeader>
               <CardContent>
-                {!stats?.recentActivity?.deals?.length ? (
+                {recentDeals.length === 0 ? (
                   <div className="text-center py-8 text-gray-500">
                     <p>No recent deals</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {stats.recentActivity.deals.map((deal) => (
-                      <div
-                        key={deal.id}
-                        className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium text-gray-900 truncate">
-                            {deal.owner?.ownerName || 'Unknown Owner'}
-                          </p>
-                          <p className="text-sm text-gray-500 truncate">
-                            {deal.property?.county}, {deal.property?.state} • {deal.hitType}
-                          </p>
+                    {recentDeals.map((deal) => {
+                      const Icon = HIT_TYPE_ICONS[deal.hitType] || HelpCircle;
+                      return (
+                        <div
+                          key={deal.id}
+                          className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                        >
+                          <div className="min-w-0 flex-1">
+                            {deal.owner ? (
+                              <Link href={`/owners/${deal.owner.id}`}>
+                                <span className="font-medium text-blue-600 hover:underline truncate block">
+                                  {deal.owner.ownerName || 'Unknown Owner'}
+                                </span>
+                              </Link>
+                            ) : (
+                              <p className="font-medium text-gray-900 truncate">Unknown Owner</p>
+                            )}
+                            <p className="text-sm text-gray-500 truncate flex items-center gap-1.5">
+                              {[deal.property?.county, deal.property?.state].filter(Boolean).join(', ') || '—'}
+                              <span className="text-gray-300">•</span>
+                              <span className="inline-flex items-center gap-1 capitalize">
+                                <Icon className="w-3.5 h-3.5 text-gray-400" />
+                                {deal.hitType}
+                              </span>
+                            </p>
+                          </div>
+                          <div className="flex flex-col items-end gap-1 ml-4 shrink-0">
+                            {deal.isConversion ? (
+                              <Badge variant="success">Won</Badge>
+                            ) : deal.isLead ? (
+                              <Badge variant="warning">Lead</Badge>
+                            ) : (
+                              <Badge variant="secondary">Touch</Badge>
+                            )}
+                            <span className="text-xs text-gray-500">{formatDate(deal.hitDate)}</span>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2 ml-4">
-                          {deal.isLead && <Badge variant="warning">Lead</Badge>}
-                          {deal.isConversion && <Badge variant="success">Won</Badge>}
-                          {!deal.isLead && !deal.isConversion && <Badge variant="secondary">Touch</Badge>}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </CardContent>
