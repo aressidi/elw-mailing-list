@@ -35,22 +35,6 @@ export function formatDate(date: string | Date | undefined | null): string {
   });
 }
 
-// Pretty calendar date (e.g. "Sep 3, 2026") rendered in UTC, so a mail date
-// stored at a day's UTC boundary shows the same day for every viewer and lines
-// up with the UTC month buckets on the Mailings-by-Month view. Mirrors
-// formatDateISO's timezone rationale, but in a human-friendly format.
-export function formatDateUTC(date: string | Date | undefined | null): string {
-  if (!date) return '-';
-  const d = typeof date === 'string' ? new Date(date) : date;
-  if (isNaN(d.getTime())) return '-';
-  return d.toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    timeZone: 'UTC',
-  });
-}
-
 // Formats a date as an ISO calendar date (YYYY-MM-DD), using UTC so the
 // stored canonical mail date doesn't shift across the viewer's timezone.
 export function formatDateISO(date: string | Date | undefined | null): string {
@@ -86,12 +70,77 @@ export function formatAcreRange(
   return `${fmt(low)}-${fmt(high)} acres`;
 }
 
-// Human-friendly "time since last mail" from a whole-month count:
-// 0 -> "This month", 1 -> "1 mo ago", 14 -> "14 mo ago". Null -> "Never".
-export function formatMonthsAgo(months: number | undefined | null): string {
-  if (months === undefined || months === null) return 'Never';
-  if (months <= 0) return 'This month';
-  return `${months} mo ago`;
+// ─── Date range presets ──────────────────────────────────────
+// Investor-friendly quick ranges for filtering by hit date. Each preset
+// resolves to an inclusive {startDate, endDate} pair of ISO datetimes
+// (local time), ready to hand to the deals API. 'all' clears the range.
+export type DateRangePreset =
+  | 'this_month'
+  | 'last_month'
+  | 'last_3_months'
+  | 'last_6_months'
+  | 'this_year'
+  | 'all';
+
+export const DATE_RANGE_PRESETS: Array<{ value: DateRangePreset; label: string }> = [
+  { value: 'this_month', label: 'This Month' },
+  { value: 'last_month', label: 'Last Month' },
+  { value: 'last_3_months', label: 'Last 3 Months' },
+  { value: 'last_6_months', label: 'Last 6 Months' },
+  { value: 'this_year', label: 'This Year' },
+  { value: 'all', label: 'All Time' },
+];
+
+export interface DateRange {
+  startDate?: string;
+  endDate?: string;
+}
+
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+}
+
+function endOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+}
+
+// Resolves a preset to a concrete inclusive date range relative to `now`.
+export function dateRangeForPreset(preset: DateRangePreset, now = new Date()): DateRange {
+  const end = endOfDay(now);
+  switch (preset) {
+    case 'this_month': {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { startDate: start.toISOString(), endDate: end.toISOString() };
+    }
+    case 'last_month': {
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lastEnd = endOfDay(new Date(now.getFullYear(), now.getMonth(), 0));
+      return { startDate: start.toISOString(), endDate: lastEnd.toISOString() };
+    }
+    case 'last_3_months': {
+      const start = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
+      return { startDate: startOfDay(start).toISOString(), endDate: end.toISOString() };
+    }
+    case 'last_6_months': {
+      const start = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+      return { startDate: startOfDay(start).toISOString(), endDate: end.toISOString() };
+    }
+    case 'this_year': {
+      const start = new Date(now.getFullYear(), 0, 1);
+      return { startDate: start.toISOString(), endDate: end.toISOString() };
+    }
+    case 'all':
+    default:
+      return {};
+  }
+}
+
+// Converts an ISO datetime back to a YYYY-MM-DD value for <input type="date">.
+export function toDateInputValue(iso: string | undefined | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 export function truncate(str: string | undefined | null, maxLen = 50): string {

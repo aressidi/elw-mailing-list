@@ -2387,11 +2387,22 @@ router.get('/intelligence/county-ranking', async (_req, res) => {
 router.get('/deals', async (req, res) => {
   try {
     const { limit, offset, page } = getPagination(req);
-    const { isLead, isConversion, hitType, startDate, endDate, sortBy = 'id', sortOrder = 'desc' } = req.query;
+    const { isLead, isConversion, hitType, outcome, startDate, endDate, sortBy = 'hitDate', sortOrder = 'desc' } = req.query;
 
     let conditions = [];
     if (isLead !== undefined) conditions.push(eq(deals.isLead, isLead === 'true'));
     if (isConversion !== undefined) conditions.push(eq(deals.isConversion, isConversion === 'true'));
+    // outcome is a simplified, mutually-exclusive view of isLead/isConversion:
+    //   conversion = closed deal, lead = qualified but not converted, touch = raw response
+    if (outcome === 'conversion') {
+      conditions.push(eq(deals.isConversion, true));
+    } else if (outcome === 'lead') {
+      conditions.push(eq(deals.isLead, true));
+      conditions.push(eq(deals.isConversion, false));
+    } else if (outcome === 'touch') {
+      conditions.push(eq(deals.isLead, false));
+      conditions.push(eq(deals.isConversion, false));
+    }
     if (hitType) conditions.push(eq(deals.hitType, hitType as any));
     if (startDate) conditions.push(gte(deals.hitDate, new Date(startDate as string)));
     if (endDate) conditions.push(lte(deals.hitDate, new Date(endDate as string)));
