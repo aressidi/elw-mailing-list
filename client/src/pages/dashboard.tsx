@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
@@ -20,6 +21,9 @@ import {
   Megaphone,
   Loader2,
   MapPin,
+  Calendar,
+  Mail,
+  ChevronRight,
 } from 'lucide-react';
 import {
   BarChart,
@@ -33,7 +37,7 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import { formatNumber, formatCurrency, formatPercent } from '../lib/format.ts';
+import { formatNumber, formatCurrency, formatPercent, formatDateISO } from '../lib/format.ts';
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316'];
 
@@ -376,41 +380,82 @@ export function Dashboard() {
 
           {/* Recent Activity */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Recent Mailings */}
+            {/* Recent Campaigns */}
             <Card>
               <CardHeader>
-                <CardTitle>Recent Mailings</CardTitle>
+                <CardTitle>Recent Campaigns</CardTitle>
               </CardHeader>
               <CardContent>
-                {!stats?.recentActivity?.mailings?.length ? (
+                {!stats?.recentActivity?.campaigns?.length ? (
                   <div className="text-center py-8 text-gray-500">
-                    <p>No recent mailings</p>
+                    <p>No recent campaigns</p>
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    {stats.recentActivity.mailings.map((mailing) => (
-                      <div
-                        key={mailing.id}
-                        className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium text-gray-900 truncate">
-                            {mailing.owner?.ownerName || 'Unknown Owner'}
-                          </p>
-                          <p className="text-sm text-gray-500 truncate">
-                            {mailing.property?.county}, {mailing.property?.state} • {mailing.campaign?.name}
-                          </p>
-                        </div>
-                        <div className="text-right ml-4">
-                          <p className="font-medium text-gray-900">
-                            {mailing.offerPrice ? formatCurrency(Number(mailing.offerPrice)) : '-'}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            {mailing.mailDate ? new Date(mailing.mailDate).toLocaleDateString() : '-'}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
+                  <div className="space-y-2">
+                    {stats.recentActivity.campaigns.map((campaign) => {
+                      const start = formatDateISO(campaign.firstMailDate);
+                      const end = formatDateISO(campaign.lastMailDate);
+                      const dateRange =
+                        !campaign.lastMailDate || start === end ? start : `${start} – ${end}`;
+                      const topCounties = campaign.counties.slice(0, 3);
+                      const moreCounties = campaign.counties.length - topCounties.length;
+                      return (
+                        <Link
+                          key={campaign.id}
+                          href={`/campaigns/${campaign.id}`}
+                          className="group block rounded-lg border border-gray-100 p-3 hover:bg-gray-50 hover:border-gray-200 transition-colors"
+                        >
+                          {/* Date range + volume: the lead attributes */}
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
+                              <Calendar className="w-3.5 h-3.5 text-gray-400" />
+                              {dateRange}
+                            </div>
+                            <div className="flex items-center gap-1.5 text-sm font-semibold text-gray-900 whitespace-nowrap">
+                              <Mail className="w-3.5 h-3.5 text-gray-400" />
+                              {formatNumber(campaign.totalMailings)} mailed
+                            </div>
+                          </div>
+
+                          {/* Geography */}
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            {campaign.states.length > 0 ? (
+                              campaign.states.map((st) => (
+                                <Badge key={st} variant="secondary" className="font-mono text-xs font-semibold">
+                                  {st}
+                                </Badge>
+                              ))
+                            ) : (
+                              <span className="text-xs text-gray-400">No states</span>
+                            )}
+                            {topCounties.length > 0 && (
+                              <span
+                                className="text-xs text-gray-500 truncate max-w-[14rem]"
+                                title={campaign.counties.join(', ')}
+                              >
+                                {topCounties.join(', ')}
+                                {moreCounties > 0 && (
+                                  <span className="text-gray-400 font-medium"> +{moreCounties} more</span>
+                                )}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Secondary: name + responses */}
+                          <div className="mt-2 flex items-center justify-between gap-3">
+                            <span className="flex items-center gap-1 text-xs text-gray-400 truncate">
+                              <Megaphone className="w-3 h-3 shrink-0" />
+                              <span className="truncate">{campaign.name}</span>
+                            </span>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <Badge variant="warning">{formatNumber(campaign.leadsCount)} leads</Badge>
+                              <Badge variant="success">{formatNumber(campaign.dealsCount)} deals</Badge>
+                              <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors" />
+                            </div>
+                          </div>
+                        </Link>
+                      );
+                    })}
                   </div>
                 )}
               </CardContent>

@@ -25,7 +25,7 @@ describe('GET /api/dashboard/stats', () => {
       totalDeals: 0, totalLeads: 0, totalConversions: 0, totalSuppressed: 0,
     });
     for (const k of ['responseRate', 'leadRate', 'conversionRate']) expect(Number(o[k])).toBe(0);
-    expect(res.body.data.recentActivity).toEqual({ mailings: [], deals: [] });
+    expect(res.body.data.recentActivity).toEqual({ mailings: [], deals: [], campaigns: [] });
   });
 
   describe('with data', () => {
@@ -84,6 +84,57 @@ describe('GET /api/dashboard/stats', () => {
       const dates = deals.map((d: any) => new Date(d.hitDate).getTime());
       expect(dates).toEqual([...dates].sort((a, b) => b - a));
       expect(new Date(deals[0].hitDate).toISOString()).toBe('2026-02-06T00:00:00.000Z');
+    });
+  });
+
+  describe('recent campaigns', () => {
+    beforeAll(async () => {
+      await resetDb();
+      const owner = await addOwner({ ownerName: 'RC Owner' });
+      // Older campaign: mailed earlier, one county in NC.
+      const older = await addCampaign({ name: 'RC Older' });
+      const pOld = await addProperty({ apn: 'RC-OLD', state: 'NC', county: 'Wake' });
+      await addMailing({
+        campaignId: older.id, propertyId: pOld.id, ownerId: owner.id,
+        mailDate: new Date(Date.UTC(2026, 0, 10)), offerPrice: '1000',
+      });
+      // Newer campaign: mailed later, spans two counties in TX, with a lead/deal.
+      const newer = await addCampaign({ name: 'RC Newer' });
+      const pA = await addProperty({ apn: 'RC-A', state: 'TX', county: 'Travis' });
+      const pB = await addProperty({ apn: 'RC-B', state: 'TX', county: 'Harris' });
+      await addMailing({
+        campaignId: newer.id, propertyId: pA.id, ownerId: owner.id,
+        mailDate: new Date(Date.UTC(2026, 2, 1)), offerPrice: '2000',
+      });
+      await addMailing({
+        campaignId: newer.id, propertyId: pB.id, ownerId: owner.id,
+        mailDate: new Date(Date.UTC(2026, 2, 15)), offerPrice: '3000',
+      });
+      await addDeal({
+        propertyId: pA.id, ownerId: owner.id, isLead: true, isConversion: true,
+        hitDate: new Date(Date.UTC(2026, 2, 20)),
+      });
+    });
+
+    it('lists campaigns by latest mail date with aggregated attributes', async () => {
+      const { campaigns } = (await request(app).get('/api/dashboard/stats')).body.data.recentActivity;
+      expect(campaigns.map((c: any) => c.name)).toEqual(['RC Newer', 'RC Older']);
+      const newer = campaigns[0];
+      expect(newer.states).toEqual(['TX']);
+      expect([...newer.counties].sort()).toEqual(['Harris', 'Travis']);
+      expect(newer.totalMailings).toBe(2);
+      expect(newer.leadsCount).toBe(1);
+      expect(newer.dealsCount).toBe(1);
+      // Date range: first mail date precedes last mail date.
+      expect(new Date(newer.lastMailDate).getTime()).toBeGreaterThan(
+        new Date(newer.firstMailDate).getTime()
+      );
+    });
+
+    it('excludes campaigns that have never been mailed', async () => {
+      await addCampaign({ name: 'RC Never Mailed' });
+      const { campaigns } = (await request(app).get('/api/dashboard/stats')).body.data.recentActivity;
+      expect(campaigns.map((c: any) => c.name)).not.toContain('RC Never Mailed');
     });
   });
 });

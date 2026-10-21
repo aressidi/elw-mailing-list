@@ -2229,6 +2229,7 @@ router.get('/dashboard/stats', async (req, res) => {
       suppressionResult,
       recentMailingsResult,
       recentDealsResult,
+      recentCampaignsResult,
     ] = await Promise.all([
       db.select({ count: count() }).from(properties),
       db.select({ count: count() }).from(owners),
@@ -2255,6 +2256,16 @@ router.get('/dashboard/stats', async (req, res) => {
           owner: true,
         },
       }),
+      // Most recent campaigns by latest mail date, with aggregated attributes
+      // (date range, states, counties, volume, leads, deals, suppressions).
+      // Only campaigns that have actually been mailed (last_mail_date not null).
+      pool.query(
+        `${campaignStatsCte()}
+         SELECT * FROM campaign_stats
+         WHERE last_mail_date IS NOT NULL
+         ORDER BY last_mail_date DESC, id DESC
+         LIMIT 5`
+      ),
     ]);
 
     const totalProperties = propertiesResult[0]?.count || 0;
@@ -2284,6 +2295,7 @@ router.get('/dashboard/stats', async (req, res) => {
       recentActivity: {
         mailings: recentMailingsResult,
         deals: recentDealsResult,
+        campaigns: recentCampaignsResult.rows.map(formatCampaignStatsRow),
       },
     };
 

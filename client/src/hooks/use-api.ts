@@ -526,6 +526,7 @@ export interface DashboardStats {
   recentActivity: {
     mailings: Array<Mailing & { property: Property | null; owner: Owner | null; campaign: Campaign | null }>;
     deals: Array<Deal & { property: Property | null; owner: Owner | null }>;
+    campaigns: CampaignWithStats[];
   };
 }
 
