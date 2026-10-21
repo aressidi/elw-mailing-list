@@ -189,17 +189,23 @@ function getSuppressionOrderBy(sortBy: string, sortOrder: string) {
 interface LastOfferInfo {
   lastOfferPrice: string | null;
   lastOfferDate: string | null;
+  // Date this property/owner was last mailed = max(mail_date), null when never
+  // mailed (or every mailing has a null mail_date). Equal to lastOfferDate by
+  // construction, but surfaced explicitly so the "Last Mailed" column has a
+  // dedicated, unambiguous field.
+  lastMailDate: string | null;
   offerCount: number;
 }
 
 async function getLastOfferByProperty(propertyIds: number[]): Promise<Map<number, LastOfferInfo>> {
   if (propertyIds.length === 0) return new Map();
-  const result = await db.execute<{ id: number; offer_price: string | null; mail_date: string | null; offer_count: string }>(sql`
-    SELECT id, offer_price, mail_date, offer_count FROM (
+  const result = await db.execute<{ id: number; offer_price: string | null; mail_date: string | null; max_mail_date: string | null; offer_count: string }>(sql`
+    SELECT id, offer_price, mail_date, max_mail_date, offer_count FROM (
       SELECT
         property_id AS id,
         offer_price,
         mail_date,
+        max(mail_date) OVER (PARTITION BY property_id) AS max_mail_date,
         count(*) OVER (PARTITION BY property_id) AS offer_count,
         row_number() OVER (PARTITION BY property_id ORDER BY mail_date DESC NULLS LAST, id DESC) AS rn
       FROM mailings
@@ -212,6 +218,7 @@ async function getLastOfferByProperty(propertyIds: number[]): Promise<Map<number
     map.set(Number(row.id), {
       lastOfferPrice: row.offer_price,
       lastOfferDate: row.mail_date,
+      lastMailDate: row.max_mail_date,
       offerCount: Number(row.offer_count),
     });
   }
@@ -220,12 +227,13 @@ async function getLastOfferByProperty(propertyIds: number[]): Promise<Map<number
 
 async function getLastOfferByOwner(ownerIds: number[]): Promise<Map<number, LastOfferInfo>> {
   if (ownerIds.length === 0) return new Map();
-  const result = await db.execute<{ id: number; offer_price: string | null; mail_date: string | null; offer_count: string }>(sql`
-    SELECT id, offer_price, mail_date, offer_count FROM (
+  const result = await db.execute<{ id: number; offer_price: string | null; mail_date: string | null; max_mail_date: string | null; offer_count: string }>(sql`
+    SELECT id, offer_price, mail_date, max_mail_date, offer_count FROM (
       SELECT
         owner_id AS id,
         offer_price,
         mail_date,
+        max(mail_date) OVER (PARTITION BY owner_id) AS max_mail_date,
         count(*) OVER (PARTITION BY owner_id) AS offer_count,
         row_number() OVER (PARTITION BY owner_id ORDER BY mail_date DESC NULLS LAST, id DESC) AS rn
       FROM mailings
@@ -238,6 +246,7 @@ async function getLastOfferByOwner(ownerIds: number[]): Promise<Map<number, Last
     map.set(Number(row.id), {
       lastOfferPrice: row.offer_price,
       lastOfferDate: row.mail_date,
+      lastMailDate: row.max_mail_date,
       offerCount: Number(row.offer_count),
     });
   }
@@ -252,6 +261,7 @@ function withLastOffer<T extends { id: number }>(row: T, map: Map<number, LastOf
     ...row,
     lastOfferPrice: info?.lastOfferPrice ?? null,
     lastOfferDate: info?.lastOfferDate ?? null,
+    lastMailDate: info?.lastMailDate ?? null,
     offerCount: info?.offerCount ?? 0,
   };
 }

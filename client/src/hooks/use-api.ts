@@ -309,6 +309,8 @@ export interface PaginatedResponse<T> {
 export interface LastOfferFields {
   lastOfferPrice: string | null;
   lastOfferDate: string | null;
+  // Date last mailed = max(mailings.mail_date); null when never mailed.
+  lastMailDate: string | null;
   offerCount: number;
 }
 

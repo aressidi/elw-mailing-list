@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef, ColumnFilters } from '../components/ui/DataTable.tsx';
 import { useOwners, Owner } from '../hooks/use-api.ts';
-import { formatDate, formatCurrency } from '../lib/format.ts';
+import { formatDate } from '../lib/format.ts';
 import { Users, Loader2 } from 'lucide-react';
 
 // How long to wait after a column filter changes before hitting the server,
@@ -130,20 +130,14 @@ export function Owners() {
       comparator: (a, b) => (a.propertyCount ?? 0) - (b.propertyCount ?? 0),
     },
     {
-      id: 'lastOfferPrice',
-      header: 'Last Offer',
-      accessorKey: 'lastOfferPrice',
-      filterType: 'number',
-      align: 'right',
-      cell: (row) => (row.lastOfferPrice != null ? formatCurrency(row.lastOfferPrice) : '-'),
-      comparator: (a, b) => (Number(a.lastOfferPrice) || 0) - (Number(b.lastOfferPrice) || 0),
-    },
-    {
-      id: 'createdAt',
-      header: 'Created Date',
-      accessorKey: 'createdAt',
+      id: 'lastMailDate',
+      header: 'Last Mailed',
+      accessorKey: 'lastMailDate',
       filterType: 'date',
-      cell: (row) => formatDate(row.createdAt),
+      cell: (row) => formatDate(row.lastMailDate),
+      comparator: (a, b) =>
+        (a.lastMailDate ? new Date(a.lastMailDate).getTime() : 0) -
+        (b.lastMailDate ? new Date(b.lastMailDate).getTime() : 0),
     },
   ];
 
