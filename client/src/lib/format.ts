@@ -70,6 +70,14 @@ export function formatAcreRange(
   return `${fmt(low)}-${fmt(high)} acres`;
 }
 
+// Human-friendly "time since last mail" from a whole-month count:
+// 0 -> "This month", 1 -> "1 mo ago", 14 -> "14 mo ago". Null -> "Never".
+export function formatMonthsAgo(months: number | undefined | null): string {
+  if (months === undefined || months === null) return 'Never';
+  if (months <= 0) return 'This month';
+  return `${months} mo ago`;
+}
+
 export function truncate(str: string | undefined | null, maxLen = 50): string {
   if (!str) return '-';
   if (str.length <= maxLen) return str;

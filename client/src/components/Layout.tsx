@@ -7,6 +7,7 @@ import {
   Megaphone,
   Ban,
   TrendingUp,
+  Brain,
   Settings,
   Menu,
   X,
@@ -26,6 +27,7 @@ const navItems = [
   { href: '/properties', label: 'Properties', icon: MapPin },
   { href: '/deals', label: 'Leads / Deals', icon: TrendingUp },
   { href: '/campaigns', label: 'Campaigns', icon: Megaphone },
+  { href: '/intelligence', label: 'Intelligence', icon: Brain },
   { href: '/suppression', label: 'Suppression', icon: Ban },
 ];
 
