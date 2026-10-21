@@ -12,7 +12,8 @@ import {
   propertyOwners,
 } from '../shared/schema.js';
 import { ownerIdentityKey } from '../scripts/owner-identity.js';
-import { canonicalCounty, matchPropertyByLocation } from '../shared/property-location.js';
+import { canonicalCounty, matchPropertyByLocation, normalizeCounty } from '../shared/property-location.js';
+import { ACRE_BAND_KEYS, acreBandCaseSql, acreBandLabel } from '../shared/acreage.js';
 
 const router = Router();
 
@@ -1984,6 +1985,108 @@ router.get('/mailings/by-county', async (req, res) => {
   } catch (error) {
     console.error('Error fetching mailing stats by county:', error);
     res.status(500).json(errorResponse('Failed to fetch mailing stats'));
+  }
+});
+
+// GET /api/mailings/by-acre-band?state=&county=&startDate=&endDate=
+// Targeting intelligence: for each parcel-size band (see shared/acreage.ts),
+// how many pieces were mailed, the average offer, and how many of those
+// mailings drew a lead or closed a deal. Shows which parcel sizes convert.
+router.get('/mailings/by-acre-band', async (req, res) => {
+  try {
+    const state = typeof req.query.state === 'string' ? req.query.state.trim() : '';
+    const county = typeof req.query.county === 'string' ? req.query.county.trim() : '';
+    const startDate = typeof req.query.startDate === 'string' ? req.query.startDate.trim() : '';
+    const endDate = typeof req.query.endDate === 'string' ? req.query.endDate.trim() : '';
+
+    // Shared filter, applied to the mailing's property/date. County is matched
+    // on the same normalized key as the properties unique index so "Benton",
+    // "Benton County" and "BENTON" all match. A deal counts for a band when it
+    // links (by property or owner) to a mailing that falls in that band.
+    const filters = sql.join(
+      [
+        sql`1=1`,
+        state ? sql`LOWER(TRIM(p.state)) = LOWER(TRIM(${state}))` : undefined,
+        county ? sql`regexp_replace(regexp_replace(upper(coalesce(p.county, '')), '\\s+COUNTY$', ''), '[^A-Z]', '', 'g') = ${normalizeCounty(county)}` : undefined,
+        startDate ? sql`m.mail_date >= ${startDate}::timestamptz` : undefined,
+        endDate ? sql`m.mail_date <= ${endDate}::timestamptz` : undefined,
+      ].filter(Boolean) as ReturnType<typeof sql>[],
+      sql` AND `,
+    );
+
+    // Band assigned from the property's acreage; the CASE is generated from the
+    // same band definitions the client uses. Aggregate entirely in SQL.
+    const bandExpr = sql.raw(acreBandCaseSql('p.acres'));
+
+    const result = await db.execute<{
+      band: string;
+      mailed: number;
+      avg_offer: number;
+      leads: number;
+      deals: number;
+    }>(sql`
+      WITH banded AS (
+        SELECT
+          m.id AS mailing_id,
+          m.property_id AS property_id,
+          m.owner_id AS owner_id,
+          m.offer_price AS offer_price,
+          ${bandExpr} AS band
+        FROM mailings m
+        LEFT JOIN properties p ON m.property_id = p.id
+        WHERE ${filters}
+      ),
+      hits AS (
+        SELECT
+          b.band AS band,
+          COUNT(DISTINCT d.id) FILTER (WHERE d.is_lead = true)::int AS leads,
+          COUNT(DISTINCT d.id) FILTER (WHERE d.is_conversion = true)::int AS deals
+        FROM banded b
+        INNER JOIN deals d ON (d.property_id = b.property_id OR d.owner_id = b.owner_id)
+        GROUP BY b.band
+      )
+      SELECT
+        b.band AS band,
+        COUNT(b.mailing_id)::int AS mailed,
+        COALESCE(AVG(b.offer_price::numeric), 0)::float AS avg_offer,
+        COALESCE(h.leads, 0)::int AS leads,
+        COALESCE(h.deals, 0)::int AS deals
+      FROM banded b
+      LEFT JOIN hits h ON h.band = b.band
+      GROUP BY b.band, h.leads, h.deals
+    `);
+
+    const byBand = new Map(result.rows.map((r) => [r.band, r]));
+
+    // Emit every band in canonical order (even empty ones) so the chart axis
+    // is stable. conversionRate = deals closed per piece mailed, in percent.
+    const stats = ACRE_BAND_KEYS.map((band) => {
+      const row = byBand.get(band);
+      const mailed = Number(row?.mailed) || 0;
+      const leads = Number(row?.leads) || 0;
+      const deals = Number(row?.deals) || 0;
+      return {
+        band,
+        label: acreBandLabel(band),
+        mailed,
+        avgOffer: Number(row?.avg_offer) || 0,
+        leads,
+        deals,
+        conversionRate: mailed > 0 ? (deals / mailed) * 100 : 0,
+      };
+    });
+
+    res.json(successResponse(stats, {
+      filter: {
+        ...(state ? { state } : {}),
+        ...(county ? { county } : {}),
+        ...(startDate ? { startDate } : {}),
+        ...(endDate ? { endDate } : {}),
+      },
+    }));
+  } catch (error) {
+    console.error('Error fetching mailing stats by acre band:', error);
+    res.status(500).json(errorResponse('Failed to fetch acre-band stats'));
   }
 });
 

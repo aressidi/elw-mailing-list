@@ -239,6 +239,27 @@ export function useMailingStatsByCounty(state?: string) {
   });
 }
 
+export function useMailingStatsByAcreBand(params?: {
+  state?: string;
+  county?: string;
+  startDate?: string;
+  endDate?: string;
+}) {
+  const query = new URLSearchParams();
+  if (params?.state) query.set('state', params.state);
+  if (params?.county) query.set('county', params.county);
+  if (params?.startDate) query.set('startDate', params.startDate);
+  if (params?.endDate) query.set('endDate', params.endDate);
+  const qs = query.toString();
+  return useQuery({
+    queryKey: ['mailings', 'stats', 'by-acre-band', params],
+    queryFn: () =>
+      fetchJson<{ success: boolean; data: AcreBandStat[] }>(
+        `${API_BASE}/mailings/by-acre-band${qs ? `?${qs}` : ''}`
+      ),
+  });
+}
+
 // ─── Deals ───────────────────────────────────────────────────
 export function useDeals(params?: { page?: number; limit?: number; isLead?: boolean; isConversion?: boolean }) {
   const query = new URLSearchParams();
@@ -540,6 +561,16 @@ export interface CountyStat {
   state: string;
   count: number;
   offers: number;
+}
+
+export interface AcreBandStat {
+  band: string;
+  label: string;
+  mailed: number;
+  avgOffer: number;
+  leads: number;
+  deals: number;
+  conversionRate: number;
 }
 
 export interface DealStats {
