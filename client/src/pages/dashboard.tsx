@@ -3,6 +3,7 @@ import { Link } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card.tsx';
 import { Badge } from '../components/ui/Badge.tsx';
 import { DataTable, ColumnDef } from '../components/ui/DataTable.tsx';
+import { MailingsByMonth } from '../components/MailingsByMonth.tsx';
 import {
   useDashboardStats,
   useMailingStatsByState,
@@ -168,6 +169,9 @@ export function Dashboard() {
         <h2 className="text-2xl font-bold text-gray-900">Dashboard</h2>
         <p className="text-gray-600 mt-1">Overview of your mailing list operations</p>
       </div>
+
+      {/* Mailings by Month — chronological campaign overview (primary view) */}
+      <MailingsByMonth />
 
       {statsLoading ? (
         <div className="flex items-center justify-center py-12">
