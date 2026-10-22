@@ -635,3 +635,37 @@ export function useCountyRanking() {
   });
 }
 
+// ─── Mailings by Month (detail) ──────────────────────────────
+export function useMailingsByMonthDetail(params?: { startDate?: string; endDate?: string }) {
+  const query = new URLSearchParams();
+  if (params?.startDate) query.set('startDate', params.startDate);
+  if (params?.endDate) query.set('endDate', params.endDate);
+  const qs = query.toString();
+  return useQuery({
+    queryKey: ['mailings', 'by-month-detail', params],
+    queryFn: () =>
+      fetchJson<{ success: boolean; data: MonthDetail[] }>(
+        `${API_BASE}/mailings/by-month-detail${qs ? `?${qs}` : ''}`
+      ),
+  });
+}
+
+export interface MonthDetailCampaign {
+  campaignId: number;
+  name: string;
+  firstMailDate: string | null;
+  states: string[];
+  counties: string[];
+  volume: number;
+  volumeByState: Record<string, number>;
+  volumeByCounty: Record<string, number>;
+}
+
+export interface MonthDetail {
+  month: string;
+  monthLabel: string;
+  campaignCount: number;
+  totalVolume: number;
+  campaigns: MonthDetailCampaign[];
+}
+

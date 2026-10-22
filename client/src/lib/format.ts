@@ -160,3 +160,15 @@ export function formatMonthsAgo(months: number | undefined | null): string {
   return `${months} mo ago`;
 }
 
+export function formatDateUTC(date: string | Date | undefined | null): string {
+  if (!date) return '—';
+  const d = typeof date === 'string' ? new Date(date) : date;
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-US', {
+    timeZone: 'UTC',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
