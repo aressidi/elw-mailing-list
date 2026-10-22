@@ -56,6 +56,10 @@ interface DataTableProps<T> {
   data: T[];
   columns: ColumnDef<T>[];
   storageKey?: string; // Key for sessionStorage persistence
+  // Initial sort applied when nothing is persisted in sessionStorage yet.
+  // Lets a page surface its most relevant ordering by default (e.g. most
+  // recently mailed first) while still letting the user re-sort.
+  defaultSort?: SortState;
   serverSide?: boolean;
   // If serverSide is true, parent handles sorting & filtering via these callbacks:
   onSortChange?: (sort: SortState | null) => void;
@@ -80,6 +84,7 @@ export function DataTable<T extends Record<string, any>>({
   data,
   columns,
   storageKey,
+  defaultSort,
   serverSide = false,
   onSortChange,
   onFilterChange,
@@ -101,7 +106,7 @@ export function DataTable<T extends Record<string, any>>({
         // ignore
       }
     }
-    return null;
+    return defaultSort ?? null;
   });
 
   const [columnFilters, setColumnFilters] = useState<ColumnFilters>(() => {

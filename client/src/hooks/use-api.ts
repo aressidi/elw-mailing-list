@@ -239,6 +239,27 @@ export function useMailingStatsByCounty(state?: string) {
   });
 }
 
+export function useMailingStatsByAcreBand(params?: {
+  state?: string;
+  county?: string;
+  startDate?: string;
+  endDate?: string;
+}) {
+  const query = new URLSearchParams();
+  if (params?.state) query.set('state', params.state);
+  if (params?.county) query.set('county', params.county);
+  if (params?.startDate) query.set('startDate', params.startDate);
+  if (params?.endDate) query.set('endDate', params.endDate);
+  const qs = query.toString();
+  return useQuery({
+    queryKey: ['mailings', 'stats', 'by-acre-band', params],
+    queryFn: () =>
+      fetchJson<{ success: boolean; data: AcreBandStat[] }>(
+        `${API_BASE}/mailings/by-acre-band${qs ? `?${qs}` : ''}`
+      ),
+  });
+}
+
 // ─── Deals ───────────────────────────────────────────────────
 export function useDeals(params?: { page?: number; limit?: number; isLead?: boolean; isConversion?: boolean }) {
   const query = new URLSearchParams();
@@ -526,6 +547,7 @@ export interface DashboardStats {
   recentActivity: {
     mailings: Array<Mailing & { property: Property | null; owner: Owner | null; campaign: Campaign | null }>;
     deals: Array<Deal & { property: Property | null; owner: Owner | null }>;
+    campaigns: CampaignWithStats[];
   };
 }
 
@@ -540,6 +562,16 @@ export interface CountyStat {
   state: string;
   count: number;
   offers: number;
+}
+
+export interface AcreBandStat {
+  band: string;
+  label: string;
+  mailed: number;
+  avgOffer: number;
+  leads: number;
+  deals: number;
+  conversionRate: number;
 }
 
 export interface DealStats {
@@ -557,3 +589,83 @@ export interface MailVolumeByMonth {
   month: string;
   count: number;
 }
+
+
+// ─── Intelligence ────────────────────────────────────────────
+export interface CountyRanking {
+  state: string;
+  county: string;
+  mailed: number;
+  deliveredProxy: number;
+  responses: number;
+  touches: number;
+  leads: number;
+  conversions: number;
+  responseRate: number;
+  leadRate: number;
+  conversionRate: number;
+  lastMailedDate: string | null;
+  monthsSinceLastMail: number | null;
+  avgAcres: number | null;
+  totalOffersSum: number;
+  suppressions: number;
+  badAddress: number;
+  badAddressRate: number;
+  remailCandidate: boolean;
+  avoid: boolean;
+}
+
+export interface CountyRankingMeta {
+  medianConversionRate: number;
+  minMailed: number;
+  remailMinMonths: number;
+  badAddressShareThreshold: number;
+  totalCounties: number;
+  remailCount: number;
+  avoidCount: number;
+}
+
+export function useCountyRanking() {
+  return useQuery({
+    queryKey: ['intelligence', 'county-ranking'],
+    queryFn: () =>
+      fetchJson<{ success: boolean; data: CountyRanking[]; meta: CountyRankingMeta }>(
+        `${API_BASE}/intelligence/county-ranking`
+      ),
+  });
+}
+
+// ─── Mailings by Month (detail) ──────────────────────────────
+export function useMailingsByMonthDetail(params?: { startDate?: string; endDate?: string }) {
+  const query = new URLSearchParams();
+  if (params?.startDate) query.set('startDate', params.startDate);
+  if (params?.endDate) query.set('endDate', params.endDate);
+  const qs = query.toString();
+  return useQuery({
+    queryKey: ['mailings', 'by-month-detail', params],
+    queryFn: () =>
+      fetchJson<{ success: boolean; data: MonthDetail[] }>(
+        `${API_BASE}/mailings/by-month-detail${qs ? `?${qs}` : ''}`
+      ),
+  });
+}
+
+export interface MonthDetailCampaign {
+  campaignId: number;
+  name: string;
+  firstMailDate: string | null;
+  states: string[];
+  counties: string[];
+  volume: number;
+  volumeByState: Record<string, number>;
+  volumeByCounty: Record<string, number>;
+}
+
+export interface MonthDetail {
+  month: string;
+  monthLabel: string;
+  campaignCount: number;
+  totalVolume: number;
+  campaigns: MonthDetailCampaign[];
+}
+

@@ -9,6 +9,7 @@ import { OwnerDetail } from './pages/owner-detail.tsx';
 import { Campaigns } from './pages/campaigns.tsx';
 import { CampaignDetail } from './pages/campaign-detail.tsx';
 import { Deals } from './pages/deals.tsx';
+import { Intelligence } from './pages/intelligence.tsx';
 import { Suppression } from './pages/suppression.tsx';
 import { LoginPage } from './pages/login.tsx';
 import { Layout } from './components/Layout.tsx';
@@ -51,6 +52,7 @@ function App() {
         <Route path="/campaigns/:id" component={CampaignDetail} />
         <Route path="/deals" component={Deals} />
         <Route path="/leads" component={Deals} />
+        <Route path="/intelligence" component={Intelligence} />
         <Route path="/suppression" component={Suppression} />
         <Route path="/login" component={LoginPage} />
         <Route>

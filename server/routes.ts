@@ -12,7 +12,9 @@ import {
   propertyOwners,
 } from '../shared/schema.js';
 import { ownerIdentityKey } from '../scripts/owner-identity.js';
-import { canonicalCounty, matchPropertyByLocation } from '../shared/property-location.js';
+import { acreBandByValue } from '../shared/acre-bands.js';
+import { canonicalCounty, matchPropertyByLocation, normalizeCounty } from '../shared/property-location.js';
+import { ACRE_BAND_KEYS, acreBandCaseSql, acreBandLabel } from '../shared/acreage.js';
 
 const router = Router();
 
@@ -189,17 +191,23 @@ function getSuppressionOrderBy(sortBy: string, sortOrder: string) {
 interface LastOfferInfo {
   lastOfferPrice: string | null;
   lastOfferDate: string | null;
+  // Date this property/owner was last mailed = max(mail_date), null when never
+  // mailed (or every mailing has a null mail_date). Equal to lastOfferDate by
+  // construction, but surfaced explicitly so the "Last Mailed" column has a
+  // dedicated, unambiguous field.
+  lastMailDate: string | null;
   offerCount: number;
 }
 
 async function getLastOfferByProperty(propertyIds: number[]): Promise<Map<number, LastOfferInfo>> {
   if (propertyIds.length === 0) return new Map();
-  const result = await db.execute<{ id: number; offer_price: string | null; mail_date: string | null; offer_count: string }>(sql`
-    SELECT id, offer_price, mail_date, offer_count FROM (
+  const result = await db.execute<{ id: number; offer_price: string | null; mail_date: string | null; max_mail_date: string | null; offer_count: string }>(sql`
+    SELECT id, offer_price, mail_date, max_mail_date, offer_count FROM (
       SELECT
         property_id AS id,
         offer_price,
         mail_date,
+        max(mail_date) OVER (PARTITION BY property_id) AS max_mail_date,
         count(*) OVER (PARTITION BY property_id) AS offer_count,
         row_number() OVER (PARTITION BY property_id ORDER BY mail_date DESC NULLS LAST, id DESC) AS rn
       FROM mailings
@@ -212,6 +220,7 @@ async function getLastOfferByProperty(propertyIds: number[]): Promise<Map<number
     map.set(Number(row.id), {
       lastOfferPrice: row.offer_price,
       lastOfferDate: row.mail_date,
+      lastMailDate: row.max_mail_date,
       offerCount: Number(row.offer_count),
     });
   }
@@ -220,12 +229,13 @@ async function getLastOfferByProperty(propertyIds: number[]): Promise<Map<number
 
 async function getLastOfferByOwner(ownerIds: number[]): Promise<Map<number, LastOfferInfo>> {
   if (ownerIds.length === 0) return new Map();
-  const result = await db.execute<{ id: number; offer_price: string | null; mail_date: string | null; offer_count: string }>(sql`
-    SELECT id, offer_price, mail_date, offer_count FROM (
+  const result = await db.execute<{ id: number; offer_price: string | null; mail_date: string | null; max_mail_date: string | null; offer_count: string }>(sql`
+    SELECT id, offer_price, mail_date, max_mail_date, offer_count FROM (
       SELECT
         owner_id AS id,
         offer_price,
         mail_date,
+        max(mail_date) OVER (PARTITION BY owner_id) AS max_mail_date,
         count(*) OVER (PARTITION BY owner_id) AS offer_count,
         row_number() OVER (PARTITION BY owner_id ORDER BY mail_date DESC NULLS LAST, id DESC) AS rn
       FROM mailings
@@ -238,8 +248,29 @@ async function getLastOfferByOwner(ownerIds: number[]): Promise<Map<number, Last
     map.set(Number(row.id), {
       lastOfferPrice: row.offer_price,
       lastOfferDate: row.mail_date,
+      lastMailDate: row.max_mail_date,
       offerCount: Number(row.offer_count),
     });
+  }
+  return map;
+}
+
+// Last Mailed = the greatest mail_date across all of an owner's mailings
+// (null when the owner has never been mailed). Computed as a single batched
+// SQL aggregation keyed off the owner ids on the current page -- never one
+// query per row, and never a full-table scan in JS. Kept independent of the
+// Last Offer helpers so each can evolve (or be removed) on its own.
+async function getLastMailedByOwner(ownerIds: number[]): Promise<Map<number, string | null>> {
+  if (ownerIds.length === 0) return new Map();
+  const result = await db.execute<{ id: number; last_mail_date: string | null }>(sql`
+    SELECT owner_id AS id, max(mail_date) AS last_mail_date
+    FROM mailings
+    WHERE owner_id IN ${ownerIds}
+    GROUP BY owner_id
+  `);
+  const map = new Map<number, string | null>();
+  for (const row of result.rows) {
+    map.set(Number(row.id), row.last_mail_date);
   }
   return map;
 }
@@ -252,6 +283,7 @@ function withLastOffer<T extends { id: number }>(row: T, map: Map<number, LastOf
     ...row,
     lastOfferPrice: info?.lastOfferPrice ?? null,
     lastOfferDate: info?.lastOfferDate ?? null,
+    lastMailDate: info?.lastMailDate ?? null,
     offerCount: info?.offerCount ?? 0,
   };
 }
@@ -266,6 +298,18 @@ function withLastOffer<T extends { id: number }>(row: T, map: Map<number, LastOf
 interface PropertyPreview {
   id: number;
   apn: string;
+  state: string | null;
+  county: string | null;
+}
+
+// A distinct (state, county) location an owner holds property in, with how many
+// of their properties fall there. Aggregated across ALL of an owner's
+// properties (not just the previewed first few) so the Owners list can show a
+// compact "NC: Halifax; AR: Benton" style summary at a glance.
+interface OwnerLocationSummary {
+  state: string | null;
+  county: string | null;
+  count: number;
 }
 
 interface OwnerPreview {
@@ -277,26 +321,49 @@ const RELATED_RECORD_PREVIEW_LIMIT = 3;
 
 async function getPropertiesByOwner(
   ownerIds: number[]
-): Promise<Map<number, { propertyCount: number; properties: PropertyPreview[] }>> {
+): Promise<Map<number, { propertyCount: number; properties: PropertyPreview[]; locations: OwnerLocationSummary[] }>> {
   if (ownerIds.length === 0) return new Map();
   const result = await db.execute<{ owner_id: number; property_count: string; properties: PropertyPreview[] }>(sql`
     SELECT po.owner_id,
            count(*) AS property_count,
-           json_agg(json_build_object('id', p.id, 'apn', p.apn) ORDER BY p.id ASC) AS properties
+           json_agg(json_build_object('id', p.id, 'apn', p.apn, 'state', p.state, 'county', p.county) ORDER BY p.id ASC) AS properties
     FROM property_owners po
     JOIN properties p ON p.id = po.property_id
     WHERE po.owner_id IN ${ownerIds}
     GROUP BY po.owner_id
   `);
-  const map = new Map<number, { propertyCount: number; properties: PropertyPreview[] }>();
+  const map = new Map<number, { propertyCount: number; properties: PropertyPreview[]; locations: OwnerLocationSummary[] }>();
   for (const row of result.rows) {
     const all = Array.isArray(row.properties) ? row.properties : [];
     map.set(Number(row.owner_id), {
       propertyCount: Number(row.property_count),
       properties: all.slice(0, RELATED_RECORD_PREVIEW_LIMIT),
+      // Distinct (state, county) pairs across ALL of this owner's properties,
+      // so a multi-property owner reads as a short "NC: Halifax; AR: Benton"
+      // summary rather than a repeated-location list.
+      locations: summarizeLocations(all),
     });
   }
   return map;
+}
+
+// Collapses a property list into distinct (state, county) pairs with counts,
+// preserving first-seen order (properties arrive sorted by id). Nulls are kept
+// as their own bucket so owners with un-located properties still surface.
+function summarizeLocations(props: PropertyPreview[]): OwnerLocationSummary[] {
+  const byKey = new Map<string, OwnerLocationSummary>();
+  for (const p of props) {
+    const state = p.state ?? null;
+    const county = p.county ?? null;
+    const key = `${state ?? ''}|${county ?? ''}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      byKey.set(key, { state, county, count: 1 });
+    }
+  }
+  return Array.from(byKey.values());
 }
 
 async function getOwnersByProperty(
@@ -319,6 +386,35 @@ async function getOwnersByProperty(
       ownerCount: Number(row.owner_count),
       owners: all.slice(0, RELATED_RECORD_PREVIEW_LIMIT),
     });
+  }
+  return map;
+}
+
+// Batched suppression lookup for a page of properties. A parcel counts as
+// suppressed when a mailing_suppression row targets it directly (property_id)
+// or targets any of its linked owners (owner_id) -- the same OR relationship
+// the campaign aggregates use. Returns the distinct reason set per property;
+// absence from the map means not suppressed.
+async function getSuppressionByProperty(propertyIds: number[]): Promise<Map<number, string[]>> {
+  if (propertyIds.length === 0) return new Map();
+  const result = await db.execute<{ property_id: number; reasons: string[] }>(sql`
+    SELECT sub.property_id, array_agg(DISTINCT sub.reason) AS reasons
+    FROM (
+      SELECT ms.property_id AS property_id, ms.reason::text AS reason
+      FROM mailing_suppression ms
+      WHERE ms.property_id IN ${propertyIds}
+      UNION
+      SELECT po.property_id, ms.reason::text AS reason
+      FROM property_owners po
+      JOIN mailing_suppression ms ON ms.owner_id = po.owner_id
+      WHERE po.property_id IN ${propertyIds}
+    ) sub
+    GROUP BY sub.property_id
+  `);
+  const map = new Map<number, string[]>();
+  for (const row of result.rows) {
+    const reasons = Array.isArray(row.reasons) ? row.reasons.filter(Boolean) : [];
+    map.set(Number(row.property_id), reasons);
   }
   return map;
 }
@@ -435,25 +531,53 @@ router.get('/search', async (req, res) => {
 // Properties Routes
 // ============================================================
 
-// GET /api/properties - List all (paginated), filter by state/county/APN
+// GET /api/properties - List all (paginated). Filters (all case-insensitive):
+// state, county, apn, owner (matches any linked owner's name), and acreBand
+// (a band token from shared/acre-bands). Also returns a `summary` block
+// aggregated over the whole filtered set for the page header.
 router.get('/properties', async (req, res) => {
   try {
     const { limit, offset, page } = getPagination(req);
-    const { state, county, apn, sortBy = 'id', sortOrder = 'asc' } = req.query;
+    const { state, county, apn, owner, acreBand, sortBy = 'id', sortOrder = 'asc' } = req.query;
 
-    let conditions = [];
-    if (state) conditions.push(eq(properties.state, state as string));
+    const conditions = [];
+    // State codes are stored uppercase; ilike (no wildcards) matches the exact
+    // code case-insensitively, e.g. "nc" -> "NC".
+    if (state) conditions.push(ilike(properties.state, state as string));
     if (county) conditions.push(ilike(properties.county, `%${county}%`));
     if (apn) conditions.push(ilike(properties.apn, `%${apn}%`));
+    if (owner) {
+      const ownerTerm = `%${owner as string}%`;
+      conditions.push(sql`EXISTS (
+        SELECT 1 FROM ${propertyOwners} po
+        JOIN ${owners} o ON o.id = po.owner_id
+        WHERE po.property_id = ${properties.id} AND o.owner_name ILIKE ${ownerTerm}
+      )`);
+    }
+    if (acreBand) {
+      const band = acreBandByValue(acreBand as string);
+      if (band) {
+        conditions.push(sql`${properties.acres} IS NOT NULL`);
+        conditions.push(sql`${properties.acres} >= ${band.min}`);
+        if (band.max !== null) conditions.push(sql`${properties.acres} < ${band.max}`);
+      }
+    }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    // Get total count
-    const totalResult = await db
-      .select({ count: count() })
+    // Single aggregate pass over the filtered set: total (drives pagination)
+    // plus the summary-header figures (acres span, distinct state/county counts).
+    const [summaryRow] = await db
+      .select({
+        total: count(),
+        minAcres: sql<string | null>`min(${properties.acres})`,
+        maxAcres: sql<string | null>`max(${properties.acres})`,
+        stateCount: sql<string>`count(distinct ${properties.state})`,
+        countyCount: sql<string>`count(distinct ${properties.county})`,
+      })
       .from(properties)
       .where(whereClause);
-    const total = totalResult[0]?.count || 0;
+    const total = summaryRow?.total || 0;
 
     // Get paginated results
     const results = await db
@@ -465,16 +589,20 @@ router.get('/properties', async (req, res) => {
       .offset(offset);
 
     const propertyIds = results.map((p) => p.id);
-    const [lastOfferByProperty, ownersByProperty] = await Promise.all([
+    const [lastOfferByProperty, ownersByProperty, suppressionByProperty] = await Promise.all([
       getLastOfferByProperty(propertyIds),
       getOwnersByProperty(propertyIds),
+      getSuppressionByProperty(propertyIds),
     ]);
     const resultsWithRelations = results.map((p) => {
-      const owners = ownersByProperty.get(p.id);
+      const ownerInfo = ownersByProperty.get(p.id);
+      const reasons = suppressionByProperty.get(p.id) ?? [];
       return {
         ...withLastOffer(p, lastOfferByProperty),
-        ownerCount: owners?.ownerCount ?? 0,
-        owners: owners?.owners ?? [],
+        ownerCount: ownerInfo?.ownerCount ?? 0,
+        owners: ownerInfo?.owners ?? [],
+        suppressed: reasons.length > 0,
+        suppressionReasons: reasons,
       };
     });
 
@@ -484,6 +612,13 @@ router.get('/properties', async (req, res) => {
         page,
         limit,
         totalPages: Math.ceil(total / limit),
+      },
+      summary: {
+        total,
+        minAcres: summaryRow?.minAcres ?? null,
+        maxAcres: summaryRow?.maxAcres ?? null,
+        stateCount: Number(summaryRow?.stateCount ?? 0),
+        countyCount: Number(summaryRow?.countyCount ?? 0),
       },
     }));
   } catch (error) {
@@ -667,7 +802,7 @@ router.post('/properties/bulk', async (req, res) => {
 router.get('/owners', async (req, res) => {
   try {
     const { limit, offset, page } = getPagination(req);
-    const { name, firstName, lastName, ownerName, state, sortBy = 'id', sortOrder = 'asc' } = req.query;
+    const { name, firstName, lastName, ownerName, state, propertyState, propertyCounty, sortBy = 'id', sortOrder = 'asc' } = req.query;
 
     let conditions = [];
     if (name) {
@@ -703,6 +838,35 @@ router.get('/owners', async (req, res) => {
       );
     }
 
+    // Property location filters: keep owners that hold at least one property in
+    // a matching state/county. Done as an ilike subquery (SQL, pre-pagination)
+    // so the total reflects the filtered set and we never scan the full table
+    // in JS. property_owners -> properties is the owner->location join.
+    if (propertyState) {
+      conditions.push(
+        inArray(
+          owners.id,
+          db
+            .select({ ownerId: propertyOwners.ownerId })
+            .from(propertyOwners)
+            .innerJoin(properties, eq(properties.id, propertyOwners.propertyId))
+            .where(ilike(properties.state, `%${propertyState}%`))
+        )
+      );
+    }
+    if (propertyCounty) {
+      conditions.push(
+        inArray(
+          owners.id,
+          db
+            .select({ ownerId: propertyOwners.ownerId })
+            .from(propertyOwners)
+            .innerJoin(properties, eq(properties.id, propertyOwners.propertyId))
+            .where(ilike(properties.county, `%${propertyCounty}%`))
+        )
+      );
+    }
+
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     // Get total count
@@ -724,16 +888,19 @@ router.get('/owners', async (req, res) => {
     const results = await query;
 
     const ownerIdsForPage = results.map((o) => o.id);
-    const [lastOfferByOwner, propertiesByOwner] = await Promise.all([
+    const [lastOfferByOwner, lastMailedByOwner, propertiesByOwner] = await Promise.all([
       getLastOfferByOwner(ownerIdsForPage),
+      getLastMailedByOwner(ownerIdsForPage),
       getPropertiesByOwner(ownerIdsForPage),
     ]);
     const resultsWithRelations = results.map((o) => {
       const properties = propertiesByOwner.get(o.id);
       return {
         ...withLastOffer(o, lastOfferByOwner),
+        lastMailed: lastMailedByOwner.get(o.id) ?? null,
         propertyCount: properties?.propertyCount ?? 0,
         properties: properties?.properties ?? [],
+        locations: properties?.locations ?? [],
       };
     });
 
@@ -1987,6 +2154,499 @@ router.get('/mailings/by-county', async (req, res) => {
   }
 });
 
+// GET /api/mailings/by-month-detail?startDate=&endDate= - Chronological
+// (newest month first) campaign overview for the dashboard. Answers "what did
+// we mail, where, and how much, in a given month?". Everything is aggregated
+// in SQL: the only rows crossing the wire are one per (month, campaign), each
+// already carrying its per-state and per-county volume breakdown as JSON.
+// Volume = count of mailing rows in that campaign/month; month comes from
+// mail_date (UTC-truncated, matching the UTC date display elsewhere).
+router.get('/mailings/by-month-detail', async (req, res) => {
+  try {
+    const startDate = typeof req.query.startDate === 'string' && req.query.startDate.trim()
+      ? req.query.startDate.trim()
+      : null;
+    const endDate = typeof req.query.endDate === 'string' && req.query.endDate.trim()
+      ? req.query.endDate.trim()
+      : null;
+
+    // `base` restricts to dated, campaign-tagged mailings and tags each with
+    // its UTC month + property location. The per-state / per-county rollups and
+    // the campaign-month totals all derive from it, so nothing but grouped
+    // aggregates ever materialize. States/counties for property-less mailings
+    // fall under "Unknown" rather than being dropped from the volume.
+    const result = await db.execute<{
+      month: string;
+      month_label: string;
+      campaign_id: number;
+      name: string;
+      first_mail_date: string;
+      volume: number;
+      volume_by_state: Record<string, number> | null;
+      volume_by_county: Record<string, number> | null;
+    }>(sql`
+      WITH base AS (
+        SELECT
+          to_char((m.mail_date AT TIME ZONE 'UTC'), 'YYYY-MM') AS month,
+          m.campaign_id AS campaign_id,
+          m.mail_date AS mail_date,
+          p.state AS state,
+          p.county AS county
+        FROM mailings m
+        LEFT JOIN properties p ON p.id = m.property_id
+        WHERE m.mail_date IS NOT NULL
+          AND m.campaign_id IS NOT NULL
+          ${startDate ? sql`AND m.mail_date >= ${startDate}::timestamptz` : sql``}
+          ${endDate ? sql`AND m.mail_date <= ${endDate}::timestamptz` : sql``}
+      ),
+      by_state AS (
+        SELECT month, campaign_id, COALESCE(NULLIF(TRIM(state), ''), 'Unknown') AS state, COUNT(*)::int AS cnt
+        FROM base
+        GROUP BY month, campaign_id, COALESCE(NULLIF(TRIM(state), ''), 'Unknown')
+      ),
+      by_county AS (
+        SELECT month, campaign_id, COALESCE(NULLIF(TRIM(county), ''), 'Unknown') AS county, COUNT(*)::int AS cnt
+        FROM base
+        GROUP BY month, campaign_id, COALESCE(NULLIF(TRIM(county), ''), 'Unknown')
+      ),
+      campaign_month AS (
+        SELECT month, campaign_id, MIN(mail_date) AS first_mail_date, COUNT(*)::int AS volume
+        FROM base
+        GROUP BY month, campaign_id
+      )
+      SELECT
+        cm.month AS month,
+        to_char(to_date(cm.month, 'YYYY-MM'), 'FMMonth YYYY') AS month_label,
+        cm.campaign_id AS campaign_id,
+        c.name AS name,
+        cm.first_mail_date AS first_mail_date,
+        cm.volume AS volume,
+        (SELECT json_object_agg(bs.state, bs.cnt) FROM by_state bs
+          WHERE bs.month = cm.month AND bs.campaign_id = cm.campaign_id) AS volume_by_state,
+        (SELECT json_object_agg(bc.county, bc.cnt) FROM by_county bc
+          WHERE bc.month = cm.month AND bc.campaign_id = cm.campaign_id) AS volume_by_county
+      FROM campaign_month cm
+      JOIN campaigns c ON c.id = cm.campaign_id
+      ORDER BY cm.month DESC, cm.volume DESC, cm.campaign_id DESC
+    `);
+
+    // Rows arrive newest-month-first with campaigns in descending volume, so a
+    // Map keyed by month preserves that order. County keys are canonicalized
+    // here (e.g. "Benton" / "Benton County" merge) the same way /by-county does.
+    interface MonthBucket {
+      month: string;
+      monthLabel: string;
+      campaignCount: number;
+      totalVolume: number;
+      campaigns: Array<{
+        campaignId: number;
+        name: string;
+        firstMailDate: string | null;
+        states: string[];
+        counties: string[];
+        volume: number;
+        volumeByState: Record<string, number>;
+        volumeByCounty: Record<string, number>;
+      }>;
+    }
+
+    const monthsMap = new Map<string, MonthBucket>();
+
+    for (const row of result.rows) {
+      let bucket = monthsMap.get(row.month);
+      if (!bucket) {
+        bucket = {
+          month: row.month,
+          monthLabel: row.month_label,
+          campaignCount: 0,
+          totalVolume: 0,
+          campaigns: [],
+        };
+        monthsMap.set(row.month, bucket);
+      }
+
+      const volumeByState: Record<string, number> = {};
+      for (const [st, n] of Object.entries(row.volume_by_state ?? {})) {
+        volumeByState[st] = Number(n);
+      }
+
+      const volumeByCounty: Record<string, number> = {};
+      for (const [rawCounty, n] of Object.entries(row.volume_by_county ?? {})) {
+        const county = rawCounty === 'Unknown' ? 'Unknown' : (canonicalCounty(rawCounty) || 'Unknown');
+        volumeByCounty[county] = (volumeByCounty[county] || 0) + Number(n);
+      }
+
+      const volume = Number(row.volume);
+      bucket.campaigns.push({
+        campaignId: Number(row.campaign_id),
+        name: row.name,
+        firstMailDate: row.first_mail_date || null,
+        states: Object.keys(volumeByState).sort((a, b) => (volumeByState[b] - volumeByState[a]) || a.localeCompare(b)),
+        counties: Object.keys(volumeByCounty).sort((a, b) => (volumeByCounty[b] - volumeByCounty[a]) || a.localeCompare(b)),
+        volume,
+        volumeByState,
+        volumeByCounty,
+      });
+      bucket.campaignCount += 1;
+      bucket.totalVolume += volume;
+    }
+
+    res.json(successResponse(Array.from(monthsMap.values())));
+  } catch (error) {
+    console.error('Error fetching mailings by month detail:', error);
+    res.status(500).json(errorResponse('Failed to fetch mailings by month detail'));
+  }
+});
+
+// ============================================================
+// Intelligence Routes (forward-looking analytics)
+// ============================================================
+
+// A county needs at least this many mailings before its rates are trusted
+// enough to flag it. Below this, a lucky 1-of-3 conversion would look elite,
+// so sub-threshold counties are shown but never flagged and never counted
+// toward the conversion-rate median that the re-mail test compares against.
+const INTEL_MIN_MAILED = 50;
+// Re-mail candidates must be "rested": no mail sent in at least this many
+// whole months, so we're suggesting fresh dollars, not re-hitting a list
+// that's still warm.
+const INTEL_REMAIL_MIN_MONTHS = 3;
+// A county whose bad-address suppressions are at least this share of its
+// mailed volume is burning postage on undeliverable parcels -> avoid.
+const INTEL_BAD_ADDRESS_SHARE = 0.1;
+
+// Whole calendar months between a past date and now (0 if same month).
+function monthsSince(date: Date | null, now: Date): number | null {
+  if (!date || isNaN(date.getTime())) return null;
+  const months = (now.getFullYear() - date.getFullYear()) * 12 + (now.getMonth() - date.getMonth());
+  return months < 0 ? 0 : months;
+}
+
+// GET /api/intelligence/county-ranking
+// Ranks every mailed (state, county) by performance and flags where the next
+// mail dollar should (re-mail candidates) or should not (avoid/saturated) go.
+//
+// Attribution: a mailing/deal/suppression belongs to the county of its
+// linked PROPERTY. Property-less rows have no county and are excluded.
+//
+// Rates (expressed 0-100):
+//   responseRate   = (touches + leads + conversions) / mailed  (= all hits / mailed)
+//   leadRate       = leads / mailed
+//   conversionRate = conversions / mailed
+// where a "touch" is a deal that is neither a lead nor a conversion, so the
+// three buckets partition the deals and responseRate stays an honest
+// hits-per-mailing figure consistent with the dashboard's response rate.
+router.get('/intelligence/county-ranking', async (_req, res) => {
+  try {
+    // One pass over each fact table, grouped on the raw (state, county) as
+    // stored; the canonical collapse ("Benton" / "Benton County" / "BENTON")
+    // happens in JS below, mirroring /mailings/by-county. Everything returned
+    // is additive (counts, sums) or a MAX, so collapsing raw spellings is just
+    // summing / max-ing -- averages are rebuilt from acre_sum / acre_cnt.
+    const result = await db.execute<{
+      state: string | null;
+      county: string | null;
+      mailed: number;
+      offers_sum: number;
+      last_mailed: string | null;
+      acre_sum: number;
+      acre_cnt: number;
+      touches: number;
+      leads: number;
+      conversions: number;
+      suppressions: number;
+      bad_address: number;
+    }>(sql`
+      WITH mail_agg AS (
+        SELECT
+          p.state AS state,
+          p.county AS county,
+          COUNT(m.id)::int AS mailed,
+          COALESCE(SUM(m.offer_price::numeric), 0)::float AS offers_sum,
+          MAX(m.mail_date) AS last_mailed
+        FROM mailings m
+        JOIN properties p ON m.property_id = p.id
+        GROUP BY p.state, p.county
+      ),
+      acre_agg AS (
+        SELECT state, county,
+          COALESCE(SUM(acres::numeric), 0)::float AS acre_sum,
+          COUNT(acres)::int AS acre_cnt
+        FROM (
+          SELECT DISTINCT p.id, p.state, p.county, p.acres
+          FROM properties p
+          JOIN mailings m ON m.property_id = p.id
+        ) mp
+        GROUP BY state, county
+      ),
+      deal_agg AS (
+        SELECT
+          p.state AS state,
+          p.county AS county,
+          COUNT(d.id) FILTER (WHERE NOT COALESCE(d.is_lead, false) AND NOT COALESCE(d.is_conversion, false))::int AS touches,
+          COUNT(d.id) FILTER (WHERE d.is_lead)::int AS leads,
+          COUNT(d.id) FILTER (WHERE d.is_conversion)::int AS conversions
+        FROM deals d
+        JOIN properties p ON d.property_id = p.id
+        GROUP BY p.state, p.county
+      ),
+      supp_agg AS (
+        SELECT
+          p.state AS state,
+          p.county AS county,
+          COUNT(s.id)::int AS suppressions,
+          COUNT(s.id) FILTER (WHERE s.reason = 'bad_address')::int AS bad_address
+        FROM mailing_suppression s
+        JOIN properties p ON s.property_id = p.id
+        GROUP BY p.state, p.county
+      )
+      SELECT
+        ma.state,
+        ma.county,
+        ma.mailed,
+        ma.offers_sum,
+        ma.last_mailed,
+        COALESCE(aa.acre_sum, 0)::float AS acre_sum,
+        COALESCE(aa.acre_cnt, 0)::int AS acre_cnt,
+        COALESCE(da.touches, 0)::int AS touches,
+        COALESCE(da.leads, 0)::int AS leads,
+        COALESCE(da.conversions, 0)::int AS conversions,
+        COALESCE(sa.suppressions, 0)::int AS suppressions,
+        COALESCE(sa.bad_address, 0)::int AS bad_address
+      FROM mail_agg ma
+      LEFT JOIN acre_agg aa ON ma.state IS NOT DISTINCT FROM aa.state AND ma.county IS NOT DISTINCT FROM aa.county
+      LEFT JOIN deal_agg da ON ma.state IS NOT DISTINCT FROM da.state AND ma.county IS NOT DISTINCT FROM da.county
+      LEFT JOIN supp_agg sa ON ma.state IS NOT DISTINCT FROM sa.state AND ma.county IS NOT DISTINCT FROM sa.county
+    `);
+
+    // Collapse raw spellings onto the canonical county name, keyed by
+    // (state, canonicalCounty) with a NUL separator so hyphenated names like
+    // "Miami-Dade" survive. Same-named counties in different states stay apart.
+    interface Accum {
+      state: string;
+      county: string;
+      mailed: number;
+      offersSum: number;
+      lastMailed: Date | null;
+      acreSum: number;
+      acreCnt: number;
+      touches: number;
+      leads: number;
+      conversions: number;
+      suppressions: number;
+      badAddress: number;
+    }
+    const byCounty: Record<string, Accum> = {};
+
+    for (const row of result.rows) {
+      const county = canonicalCounty(row.county) || 'Unknown';
+      const state = row.state || 'Unknown';
+      const key = `${state}\u0000${county}`;
+      const last = row.last_mailed ? new Date(row.last_mailed) : null;
+
+      let acc = byCounty[key];
+      if (!acc) {
+        acc = byCounty[key] = {
+          state, county,
+          mailed: 0, offersSum: 0, lastMailed: null,
+          acreSum: 0, acreCnt: 0,
+          touches: 0, leads: 0, conversions: 0,
+          suppressions: 0, badAddress: 0,
+        };
+      }
+      acc.mailed += Number(row.mailed);
+      acc.offersSum += Number(row.offers_sum);
+      acc.acreSum += Number(row.acre_sum);
+      acc.acreCnt += Number(row.acre_cnt);
+      acc.touches += Number(row.touches);
+      acc.leads += Number(row.leads);
+      acc.conversions += Number(row.conversions);
+      acc.suppressions += Number(row.suppressions);
+      acc.badAddress += Number(row.bad_address);
+      if (last && (!acc.lastMailed || last > acc.lastMailed)) acc.lastMailed = last;
+    }
+
+    const now = new Date();
+    const rows = Object.values(byCounty).map((a) => {
+      const responses = a.touches + a.leads + a.conversions;
+      const rate = (n: number) => (a.mailed > 0 ? (n / a.mailed) * 100 : 0);
+      const badAddressRate = a.mailed > 0 ? (a.badAddress / a.mailed) * 100 : 0;
+      return {
+        state: a.state,
+        county: a.county,
+        mailed: a.mailed,
+        // Deliverable proxy: mailed volume net of known bad-address parcels
+        // (we don't track true USPS delivery, so this is the best stand-in).
+        deliveredProxy: Math.max(0, a.mailed - a.badAddress),
+        responses,
+        touches: a.touches,
+        leads: a.leads,
+        conversions: a.conversions,
+        responseRate: Math.round(rate(responses) * 100) / 100,
+        leadRate: Math.round(rate(a.leads) * 100) / 100,
+        conversionRate: Math.round(rate(a.conversions) * 100) / 100,
+        lastMailedDate: a.lastMailed ? a.lastMailed.toISOString() : null,
+        monthsSinceLastMail: monthsSince(a.lastMailed, now),
+        avgAcres: a.acreCnt > 0 ? Math.round((a.acreSum / a.acreCnt) * 100) / 100 : null,
+        totalOffersSum: Math.round(a.offersSum * 100) / 100,
+        suppressions: a.suppressions,
+        badAddress: a.badAddress,
+        badAddressRate: Math.round(badAddressRate * 100) / 100,
+      };
+    });
+
+    // Median conversion rate across counties that clear the volume threshold,
+    // so the "above median" test isn't skewed by tiny, noisy samples.
+    const eligible = rows.filter((r) => r.mailed >= INTEL_MIN_MAILED);
+    const sortedConv = eligible.map((r) => r.conversionRate).sort((a, b) => a - b);
+    const medianConversionRate = sortedConv.length
+      ? sortedConv.length % 2
+        ? sortedConv[(sortedConv.length - 1) / 2]
+        : (sortedConv[sortedConv.length / 2 - 1] + sortedConv[sortedConv.length / 2]) / 2
+      : 0;
+
+    const ranked = rows.map((r) => {
+      const qualifies = r.mailed >= INTEL_MIN_MAILED;
+      const remailCandidate =
+        qualifies &&
+        r.conversionRate > medianConversionRate &&
+        r.monthsSinceLastMail !== null &&
+        r.monthsSinceLastMail >= INTEL_REMAIL_MIN_MONTHS;
+      const avoid =
+        qualifies &&
+        ((r.responses === 0) || r.badAddressRate >= INTEL_BAD_ADDRESS_SHARE * 100);
+      return { ...r, remailCandidate, avoid };
+    });
+
+    // Default order: strongest performers first (conversion, then response,
+    // then volume). The client table is fully re-sortable.
+    ranked.sort(
+      (a, b) =>
+        b.conversionRate - a.conversionRate ||
+        b.responseRate - a.responseRate ||
+        b.mailed - a.mailed,
+    );
+
+    res.json(
+      successResponse(ranked, {
+        meta: {
+          medianConversionRate: Math.round(medianConversionRate * 100) / 100,
+          minMailed: INTEL_MIN_MAILED,
+          remailMinMonths: INTEL_REMAIL_MIN_MONTHS,
+          badAddressShareThreshold: INTEL_BAD_ADDRESS_SHARE * 100,
+          totalCounties: ranked.length,
+          remailCount: ranked.filter((r) => r.remailCandidate).length,
+          avoidCount: ranked.filter((r) => r.avoid).length,
+        },
+      }),
+    );
+  } catch (error) {
+    console.error('Error fetching county ranking:', error);
+    res.status(500).json(errorResponse('Failed to fetch county ranking'));
+  }
+});
+// GET /api/mailings/by-acre-band?state=&county=&startDate=&endDate=
+// Targeting intelligence: for each parcel-size band (see shared/acreage.ts),
+// how many pieces were mailed, the average offer, and how many of those
+// mailings drew a lead or closed a deal. Shows which parcel sizes convert.
+router.get('/mailings/by-acre-band', async (req, res) => {
+  try {
+    const state = typeof req.query.state === 'string' ? req.query.state.trim() : '';
+    const county = typeof req.query.county === 'string' ? req.query.county.trim() : '';
+    const startDate = typeof req.query.startDate === 'string' ? req.query.startDate.trim() : '';
+    const endDate = typeof req.query.endDate === 'string' ? req.query.endDate.trim() : '';
+
+    // Shared filter, applied to the mailing's property/date. County is matched
+    // on the same normalized key as the properties unique index so "Benton",
+    // "Benton County" and "BENTON" all match. A deal counts for a band when it
+    // links (by property or owner) to a mailing that falls in that band.
+    const filters = sql.join(
+      [
+        sql`1=1`,
+        state ? sql`LOWER(TRIM(p.state)) = LOWER(TRIM(${state}))` : undefined,
+        county ? sql`regexp_replace(regexp_replace(upper(coalesce(p.county, '')), '\\s+COUNTY$', ''), '[^A-Z]', '', 'g') = ${normalizeCounty(county)}` : undefined,
+        startDate ? sql`m.mail_date >= ${startDate}::timestamptz` : undefined,
+        endDate ? sql`m.mail_date <= ${endDate}::timestamptz` : undefined,
+      ].filter(Boolean) as ReturnType<typeof sql>[],
+      sql` AND `,
+    );
+
+    // Band assigned from the property's acreage; the CASE is generated from the
+    // same band definitions the client uses. Aggregate entirely in SQL.
+    const bandExpr = sql.raw(acreBandCaseSql('p.acres'));
+
+    const result = await db.execute<{
+      band: string;
+      mailed: number;
+      avg_offer: number;
+      leads: number;
+      deals: number;
+    }>(sql`
+      WITH banded AS (
+        SELECT
+          m.id AS mailing_id,
+          m.property_id AS property_id,
+          m.owner_id AS owner_id,
+          m.offer_price AS offer_price,
+          ${bandExpr} AS band
+        FROM mailings m
+        LEFT JOIN properties p ON m.property_id = p.id
+        WHERE ${filters}
+      ),
+      hits AS (
+        SELECT
+          b.band AS band,
+          COUNT(DISTINCT d.id) FILTER (WHERE d.is_lead = true)::int AS leads,
+          COUNT(DISTINCT d.id) FILTER (WHERE d.is_conversion = true)::int AS deals
+        FROM banded b
+        INNER JOIN deals d ON (d.property_id = b.property_id OR d.owner_id = b.owner_id)
+        GROUP BY b.band
+      )
+      SELECT
+        b.band AS band,
+        COUNT(b.mailing_id)::int AS mailed,
+        COALESCE(AVG(b.offer_price::numeric), 0)::float AS avg_offer,
+        COALESCE(h.leads, 0)::int AS leads,
+        COALESCE(h.deals, 0)::int AS deals
+      FROM banded b
+      LEFT JOIN hits h ON h.band = b.band
+      GROUP BY b.band, h.leads, h.deals
+    `);
+
+    const byBand = new Map(result.rows.map((r) => [r.band, r]));
+
+    // Emit every band in canonical order (even empty ones) so the chart axis
+    // is stable. conversionRate = deals closed per piece mailed, in percent.
+    const stats = ACRE_BAND_KEYS.map((band) => {
+      const row = byBand.get(band);
+      const mailed = Number(row?.mailed) || 0;
+      const leads = Number(row?.leads) || 0;
+      const deals = Number(row?.deals) || 0;
+      return {
+        band,
+        label: acreBandLabel(band),
+        mailed,
+        avgOffer: Number(row?.avg_offer) || 0,
+        leads,
+        deals,
+        conversionRate: mailed > 0 ? (deals / mailed) * 100 : 0,
+      };
+    });
+
+    res.json(successResponse(stats, {
+      filter: {
+        ...(state ? { state } : {}),
+        ...(county ? { county } : {}),
+        ...(startDate ? { startDate } : {}),
+        ...(endDate ? { endDate } : {}),
+      },
+    }));
+  } catch (error) {
+    console.error('Error fetching mailing stats by acre band:', error);
+    res.status(500).json(errorResponse('Failed to fetch acre-band stats'));
+  }
+});
+
 // ============================================================
 // Deals/Responses Routes
 // ============================================================
@@ -1995,11 +2655,22 @@ router.get('/mailings/by-county', async (req, res) => {
 router.get('/deals', async (req, res) => {
   try {
     const { limit, offset, page } = getPagination(req);
-    const { isLead, isConversion, hitType, startDate, endDate, sortBy = 'id', sortOrder = 'desc' } = req.query;
+    const { isLead, isConversion, hitType, outcome, startDate, endDate, sortBy = 'hitDate', sortOrder = 'desc' } = req.query;
 
     let conditions = [];
     if (isLead !== undefined) conditions.push(eq(deals.isLead, isLead === 'true'));
     if (isConversion !== undefined) conditions.push(eq(deals.isConversion, isConversion === 'true'));
+    // outcome is a simplified, mutually-exclusive view of isLead/isConversion:
+    //   conversion = closed deal, lead = qualified but not converted, touch = raw response
+    if (outcome === 'conversion') {
+      conditions.push(eq(deals.isConversion, true));
+    } else if (outcome === 'lead') {
+      conditions.push(eq(deals.isLead, true));
+      conditions.push(eq(deals.isConversion, false));
+    } else if (outcome === 'touch') {
+      conditions.push(eq(deals.isLead, false));
+      conditions.push(eq(deals.isConversion, false));
+    }
     if (hitType) conditions.push(eq(deals.hitType, hitType as any));
     if (startDate) conditions.push(gte(deals.hitDate, new Date(startDate as string)));
     if (endDate) conditions.push(lte(deals.hitDate, new Date(endDate as string)));
@@ -2229,6 +2900,7 @@ router.get('/dashboard/stats', async (req, res) => {
       suppressionResult,
       recentMailingsResult,
       recentDealsResult,
+      recentCampaignsResult,
     ] = await Promise.all([
       db.select({ count: count() }).from(properties),
       db.select({ count: count() }).from(owners),
@@ -2248,13 +2920,24 @@ router.get('/dashboard/stats', async (req, res) => {
         },
       }),
       db.query.deals.findMany({
-        orderBy: desc(deals.hitDate),
+        // Newest response first; id desc breaks ties so ordering is stable.
+        orderBy: [desc(deals.hitDate), desc(deals.id)],
         limit: 5,
         with: {
           property: true,
           owner: true,
         },
       }),
+      // Most recent campaigns by latest mail date, with aggregated attributes
+      // (date range, states, counties, volume, leads, deals, suppressions).
+      // Only campaigns that have actually been mailed (last_mail_date not null).
+      pool.query(
+        `${campaignStatsCte()}
+         SELECT * FROM campaign_stats
+         WHERE last_mail_date IS NOT NULL
+         ORDER BY last_mail_date DESC, id DESC
+         LIMIT 5`
+      ),
     ]);
 
     const totalProperties = propertiesResult[0]?.count || 0;
@@ -2284,6 +2967,7 @@ router.get('/dashboard/stats', async (req, res) => {
       recentActivity: {
         mailings: recentMailingsResult,
         deals: recentDealsResult,
+        campaigns: recentCampaignsResult.rows.map(formatCampaignStatsRow),
       },
     };
 
